@@ -954,9 +954,6 @@ function upgradeStat(player, statKey) {
     const invested = player.getDynamicProperty("deepcraft:invested_points") || 0;
     const level = player.getDynamicProperty("deepcraft:level") || 1;
     
-    // --- 1. 限界到達チェック (救済措置) ---
-    // レベル20未満であれば、ポイントが15を超えていても通過させる（バグ修正のため）
-    // レベル20以上かつポイントも満タンの場合のみブロックする
     if (level >= 20 && invested >= CONFIG.STAT_POINTS_PER_LEVEL) {
         player.playSound("note.bass");
         player.sendMessage("§a§lこれ以上の強化は不可能です！(限界到達)");
@@ -970,7 +967,7 @@ function upgradeStat(player, statKey) {
     
     if (currentVal >= 100) {
         player.playSound("note.bass");
-        player.sendMessage(`§c${CONFIG.STATS[statKey]} は既に最大レベル(100)です！`);
+        player.sendMessage("§c既に最大レベルです！");
         openStatusMenu(player);
         return;
     }
@@ -981,52 +978,36 @@ function upgradeStat(player, statKey) {
         return; 
     }
 
-    // --- 2. 値の計算 (保存はまだしない) ---
-    const nextInvested = invested + 1;
-    
-    // 共通: XP消費とステータス加算は先に保存しても問題ない
     player.setDynamicProperty("deepcraft:xp", currentXP - cost);
     player.setDynamicProperty(`deepcraft:${statKey}`, currentVal + 1);
+    player.setDynamicProperty("deepcraft:invested_points", invested + 1);
     
     player.playSound("random.levelup");
     player.sendMessage(`§a強化完了: ${CONFIG.STATS[statKey]} -> ${currentVal + 1}`);
     applyStatsToEntity(player);
 
-    // --- 3. 分岐とアトミック保存 ---
-    
-    // 規定値(15)に達したか？ (バグで16以上になっていてもここで回収する)
-    if (nextInvested >= CONFIG.STAT_POINTS_PER_LEVEL) {
-        // 【ルートB: レベルアップ】
-        // 投資ポイントを「必ず 0」にして保存 (15や16を保存しない)
-        player.setDynamicProperty("deepcraft:invested_points", 0);
-
+    if (invested + 1 >= CONFIG.STAT_POINTS_PER_LEVEL) {
         if (level < 20) {
-            // レベルを加算
-            player.setDynamicProperty("deepcraft:level", level + 1);
-            
-            // タレント抽選権を付与
-            let pending = player.getDynamicProperty("deepcraft:pending_card_draws") || 0;
-            player.setDynamicProperty("deepcraft:pending_card_draws", pending + 1);
-            
-            player.sendMessage(`§6§lレベルアップ！ §r(Lv.${level + 1})`);
-            player.playSound("ui.toast.challenge_complete");
-            
-            // メニューを閉じてハブへ (連打防止)
-            system.runTimeout(() => openMenuHub(player), 20);
+            processLevelUp(player);
         } else {
-            // Lv20ボーナス完了
-            player.sendMessage("§6§l最大レベルボーナス完了！");
+            player.sendMessage("§6§l最大レベルボーナス完了！ §r(ステータス: 300/300)");
             player.playSound("ui.toast.challenge_complete");
             system.runTimeout(() => openMenuHub(player), 20);
         }
     } else {
-        // 【ルートA: 通常強化】
-        // 計算した次の値を保存
-        player.setDynamicProperty("deepcraft:invested_points", nextInvested);
-        
-        // 続けて強化できるようにメニューを再表示
         openStatusMenu(player);
     }
+}
+
+function processLevelUp(player) {
+    const currentLvl = player.getDynamicProperty("deepcraft:level");
+    player.setDynamicProperty("deepcraft:level", currentLvl + 1);
+    player.setDynamicProperty("deepcraft:invested_points", 0);
+    let pending = player.getDynamicProperty("deepcraft:pending_card_draws") || 0;
+    player.setDynamicProperty("deepcraft:pending_card_draws", pending + 1);
+    player.sendMessage(`§6§lレベルアップ！ §r(Lv.${currentLvl + 1})`);
+    player.playSound("ui.toast.challenge_complete");
+    system.runTimeout(() => openMenuHub(player), 20);
 }
 
 function openCardSelection(player) {
