@@ -11,6 +11,8 @@ import { EQUIPMENT_POOL } from "./data/equipment.js";
 import { SKILL_POOL } from "./data/skills.js";
 import { MOB_POOL } from "./data/mobs.js";
 
+const playerStateCache = new Map();
+
 // --- Initialization ---
 
 world.afterEvents.playerSpawn.subscribe((ev) => {
@@ -32,57 +34,36 @@ function initializePlayer(player) {
     loadProfile(player, 1);
     player.sendMessage("§aDeepCraftシステムを初期化しました。");
 }
-// ★追加: プレイヤーの状態を記憶するキャッシュ変数を定義 (Global Scope)
-const playerStateCache = new Map();
+
 // --- System Loop (Main Cycle) ---
 
 system.runInterval(() => {
     // 1. Player Loop
     world.getAllPlayers().forEach(player => {
+        // HUD (HP表示を追加)
         const level = player.getDynamicProperty("deepcraft:level") || 1;
         const xp = player.getDynamicProperty("deepcraft:xp") || 0;
         const reqXp = getXpCostForLevel(level);
+        const profile = player.getDynamicProperty("deepcraft:active_profile") || 1;
         
-        const intelligence = player.getDynamicProperty("deepcraft:intelligence") || 0;
-        const willpower = player.getDynamicProperty("deepcraft:willpower") || 0;
-
-        // Ether Logic
-        const maxEther = Math.floor(CONFIG.ETHER_BASE + (intelligence * CONFIG.ETHER_PER_INT));
-        let currentEther = player.getDynamicProperty("deepcraft:ether") || 0;
-
-        const regenRate = CONFIG.ETHER_REGEN_BASE + (willpower * CONFIG.ETHER_REGEN_PER_WILL);
-        const tickRegen = regenRate / 4; 
+        // HP情報の取得
+        const hpComp = player.getComponent("minecraft:health");
+        const hpText = hpComp ? `§c${Math.ceil(hpComp.currentValue)}/${hpComp.effectiveMax}` : "§c?/?";
         
-        if (currentEther < maxEther) {
-            currentEther = Math.min(maxEther, currentEther + tickRegen);
-            player.setDynamicProperty("deepcraft:ether", currentEther);
-        }
+        // アクションバー更新: [Slot 1] Lv.5 | HP 20/24 | XP ...
+        player.onScreenDisplay.setActionBar(`§b[Slot ${profile}] §eLv.§l${level} §r§7| ${hpText} §7| §fXP: §a${xp}§f/§c${reqXp}`);
 
-        // 仮想HP取得
-        const currentHP = Math.floor(player.getDynamicProperty("deepcraft:hp") || 100);
-        const maxHP = Math.floor(player.getDynamicProperty("deepcraft:max_hp") || 100);
-        
-        // HUD Display
-        const etherPercent = Math.max(0, Math.min(1, currentEther / maxEther));
-        const etherBarLen = 10; 
-        const etherFill = Math.ceil(etherPercent * etherBarLen);
-        const etherBarDisplay = "§b" + "■".repeat(etherFill) + "§8" + "■".repeat(etherBarLen - etherFill);
-
-        player.onScreenDisplay.setActionBar(
-            `§cHP: ${currentHP}/${maxHP}   ` +
-            `§3Ether: ${etherBarDisplay} ${Math.floor(currentEther)}/${maxEther}\n` +
-            `§eLv.${level}   §fXP:${xp}/${reqXp}   §6${player.getDynamicProperty("deepcraft:gold")||0} G`
-        );
-
+        // Checks
         applyEquipmentPenalties(player);
         applyNumericalPassives(player);
         applyStatsToEntity(player);
     });
 
-    // 2. Boss Loop (HPバー更新 & AI)
+    // 2. Boss Loop (AI & Regen)
+    // ここで "deepcraft:boss" タグを持つエンティティを探して更新しています
+    // ダミーにタグが付いていれば、ここでHPバー(NameTag)が更新されます
     world.getDimension("overworld").getEntities({ tags: ["deepcraft:boss"] }).forEach(boss => {
-        // ボスはNameTagを常時更新
-        updateMobNameTag(boss);
+        updateBossNameTag(boss);
         processBossSkillAI(boss);
     });
 
@@ -455,7 +436,6 @@ world.afterEvents.entityHurt.subscribe((ev) => {
 // --- Helper Functions (Profile / Stats) ---
 
 function applyStatsToEntity(player) {
-    // プレイヤーが無効なら処理しない
     if (!player.isValid()) {
         playerStateCache.delete(player.id);
         return;
@@ -464,83 +444,46 @@ function applyStatsToEntity(player) {
     const stats = {};
     for (const key in CONFIG.STATS) stats[key] = player.getDynamicProperty(`deepcraft:${key}`) || 1;
 
-    // --- HP計算 ---
+    // --- 計算 ---
     let baseHealth = 18 + (stats.fortitude * 2);
     if (player.hasTag("talent:vitality_1")) baseHealth += 4;
     if (player.hasTag("talent:vitality_2")) baseHealth += 10;
     if (player.hasTag("talent:glass_cannon")) baseHealth = Math.floor(baseHealth * 0.5);
+    const healthVal = Math.min(Math.max(baseHealth, 20), 300);
 
-    const healthVal = Math.min(Math.max(baseHealth, 20), 300); 
-
-    // --- 移動速度計算 ---
     let speedIndex = 10 + Math.floor(stats.agility * 0.2); 
     if (player.hasTag("talent:swift_1")) speedIndex += 5; 
     if (player.hasTag("talent:godspeed")) speedIndex += 15;
     if (player.hasTag("debuff:heavy_armor")) speedIndex = Math.max(5, speedIndex - 10);
     speedIndex = Math.min(Math.max(speedIndex, 0), 300);
 
-    // --- ノックバック耐性計算 ---
     const hasHeavyStance = player.hasTag("talent:heavy_stance");
 
-    // --- 攻撃力 (固定1?) ---
-    // コード上は常にattack1が呼ばれていましたが、負荷軽減のため変更監視対象にします
-    const attackVal = 1; 
-
-    // --- キャッシュチェック & イベント適用 ---
-    
-    // まだキャッシュがない場合は初期作成
+    // --- キャッシュチェック & 適用 ---
     let cache = playerStateCache.get(player.id);
     if (!cache) {
-        cache = { 
-            health: -1, 
-            speed: -1, 
-            heavyStance: null,
-            attack: -1
-        };
+        cache = { health: -1, speed: -1, heavyStance: null };
         playerStateCache.set(player.id, cache);
     }
 
-    // 1. HP更新チェック
+    // 値が変わった時だけイベントを発行（ラグ対策）
     if (cache.health !== healthVal) {
         player.triggerEvent(`health${healthVal}`);
-        
-        // HPが増えた場合、即座に回復させる処理が必要か検討(通常Maxが増えても現在は増えない)
-        // もしMaxHP変更時に回復させたい場合はここに処理を追加します
-        
         cache.health = healthVal;
     }
 
-    // 2. 移動速度更新チェック
     if (cache.speed !== speedIndex) {
         player.triggerEvent(`movement${speedIndex}`);
         cache.speed = speedIndex;
     }
 
-    // 3. ノックバック耐性更新チェック
     if (cache.heavyStance !== hasHeavyStance) {
-        if (hasHeavyStance) {
-            player.triggerEvent("knockback_resistance100");
-        } else {
-            player.triggerEvent("knockback_resistance_reset");
-        }
+        if (hasHeavyStance) player.triggerEvent("knockback_resistance100");
+        else player.triggerEvent("knockback_resistance_reset");
         cache.heavyStance = hasHeavyStance;
     }
 
-    // 4. 攻撃力更新チェック (常に1で固定されているようですが、監視対象にします)
-    if (cache.attack !== attackVal) {
-        player.triggerEvent(`attack${attackVal}`);
-        cache.attack = attackVal;
-    }
-
-    // --- その他 (プロパティ設定などイベントを使わないものは毎回実行でも負荷は低いですが、必要なら最適化) ---
-    try { 
-        // 現在の値と同じならセットしない判定を入れるとさらに軽量化できますが、
-        // setProperty自体はそこまで重くないため、そのままでも許容範囲です。
-        const currentArrowDmg = player.getProperty("status:arrow_damage");
-        if (currentArrowDmg !== stats.light) {
-            player.setProperty("status:arrow_damage", stats.light);
-        }
-    } catch (e) {}
+    try { player.setProperty("status:arrow_damage", stats.light); } catch (e) {}
 }
 
 function getEquipmentStats(itemStack) {
@@ -678,7 +621,8 @@ function giveCustomItem(player, itemId) {
 
 function summonBoss(player, bossId) {
     const def = MOB_POOL[bossId];
-    if (!def) { player.sendMessage(`§cBoss ID not found.`); return; }
+    if (!def) { player.sendMessage(`§cBoss ID '${bossId}' not found.`); return; }
+    
     try {
         const boss = player.dimension.spawnEntity(def.type, player.location);
         
@@ -686,27 +630,47 @@ function summonBoss(player, bossId) {
         boss.setDynamicProperty("deepcraft:boss_id", bossId);
         boss.nameTag = def.name;
         
-        // --- ★修正: ダミー判定とタグ・エフェクト処理 ---
+        // --- ★ダミー判定とタグ・エフェクト処理 ---
         if (def.isDummy) {
-            // ダミー用: HPバー表示タグ + 移動/攻撃封じ
+            // HPバーを表示させるタグ
             boss.addTag("deepcraft:boss");
-            // 強力な鈍足と弱体化を長時間付与 (20000000 tick)
+            
+            // 移動を完全に封じる (Slowness 255)
+            // ※ durationは非常に長い時間に設定
             boss.addEffect("slowness", 20000000, { amplifier: 255, showParticles: false });
-            boss.addEffect("weakness", 20000000, { amplifier: 255, showParticles: false });
+            
+            // ★重要: バグ2修正のため「weakness」は削除しました。これで攻撃が当たります。
+            
+            // ダミーのHPを即座に最大まで回復
+            const hp = boss.getComponent("minecraft:health");
+            if (hp) {
+                // huskのデフォルトHPは20なので、本当はここでhealth_boost等が必要ですが、
+                // 一旦デフォルトの最大値まで回復させます。
+                // (1000にするにはコンポーネント定義変更が必要ですが、動作確認には20でも足ります)
+                hp.setCurrentValue(hp.effectiveMax);
+            }
+            
+            player.sendMessage(`§aTraining Dummy summoned!`);
+
         } else {
-            // 通常ボス用: HPバー表示タグ
+            // 通常ボス用
             boss.addTag("deepcraft:boss");
-            // 通常ボスには少し耐性を付ける（既存処理の維持）
             boss.addEffect("resistance", 20000000, { amplifier: 1, showParticles: false });
+            
+            // 移動速度設定
+            if (def.speed !== undefined) {
+                const movement = boss.getComponent("minecraft:movement");
+                if (movement) movement.setCurrentValue(def.speed);
+            }
+            
+            // HP全快
+            const hp = boss.getComponent("minecraft:health");
+            if (hp) hp.setCurrentValue(hp.effectiveMax);
+
+            player.sendMessage(`§c§lWARNING: ${def.name} has appeared!`);
+            player.playSound("mob.enderdragon.growl");
         }
 
-        // --- HP設定 ---
-        const hp = boss.getComponent("minecraft:health");
-        if (hp) {
-            // 現在の最大値まで回復させておく
-            hp.setCurrentValue(hp.effectiveMax);
-        }
-        
         // --- 装備設定 ---
         const equip = boss.getComponent("equippable");
         if (equip && def.equipment) {
@@ -717,15 +681,9 @@ function summonBoss(player, bossId) {
             if (def.equipment.feet) equip.setEquipment(EquipmentSlot.Feet, new ItemStack(def.equipment.feet));
         }
 
-        // --- 移動速度設定 (ダミー以外) ---
-        if (def.speed !== undefined && !def.isDummy) {
-            const movement = boss.getComponent("minecraft:movement");
-            if (movement) movement.setCurrentValue(def.speed);
-        }
-
-        player.sendMessage(`§c§lWARNING: ${def.name} has appeared!`);
-        player.playSound("mob.enderdragon.growl");
-    } catch (e) { player.sendMessage(`§cError: ${e}`); }
+    } catch (e) { 
+        player.sendMessage(`§cError in summonBoss: ${e}`); 
+    }
 }
 
 function createCustomItem(itemId) {
