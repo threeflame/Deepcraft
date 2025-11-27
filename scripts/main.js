@@ -453,22 +453,117 @@ world.afterEvents.itemUse.subscribe((ev) => {
     }
 });
 
-system.afterEvents.scriptEventReceive.subscribe((ev) => {
-    if (!ev.sourceEntity) return;
-    if (ev.id === "deepcraft:addxp") { addXP(ev.sourceEntity, parseInt(ev.message) || 1000); }
-    if (ev.id === "deepcraft:quest") { acceptQuest(ev.sourceEntity, ev.message); }
-    if (ev.id === "deepcraft:give") { giveCustomItem(ev.sourceEntity, ev.message); }
-    if (ev.id === "deepcraft:summon") { summonBoss(ev.sourceEntity, ev.message); }
-    if (ev.id === "deepcraft:sell") { processCommandSell(ev.sourceEntity, ev.message); }
-    if (ev.id === "deepcraft:max") {
-        const player = ev.sourceEntity;
-        for (const key in CONFIG.STATS) player.setDynamicProperty(`deepcraft:${key}`, 100);
-        player.setDynamicProperty("deepcraft:level", 100);
-        player.setDynamicProperty("deepcraft:ether", 1000);
-        applyStatsToEntity(player);
-        player.sendMessage("§e§l[デバッグ] 全ステータスを最大化しました！");
-    }
+// --- Command System (Chat Trigger) ---
+
+world.beforeEvents.chatSend.subscribe((ev) => {
+    const message = ev.message;
+    // "!" で始まらない発言は無視（普通のチャット）
+    if (!message.startsWith("!")) return;
+
+    ev.cancel = true; // チャット欄には表示させない
+    const player = ev.sender;
+
+    // 安全のため system.run で遅延実行
+    system.run(() => {
+        try {
+            handleChatCommand(player, message);
+        } catch (e) {
+            console.warn("Command Error: " + e);
+        }
+    });
 });
+
+function handleChatCommand(player, message) {
+    // "!sell 100" -> ["sell", "100"] に分解
+    const args = message.substring(1).split(" ");
+    const command = args[0].toLowerCase();
+    const arg1 = args[1];
+    const arg2 = args[2];
+
+    switch (command) {
+        // --- 一般プレイヤー用 ---
+        case "menu":
+            openMenuHub(player);
+            break;
+
+        case "market":
+            openMarketMenu(player);
+            break;
+
+        case "sell":
+            if (!arg1) {
+                player.sendMessage("§c使用法: !sell <価格>");
+                return;
+            }
+            processCommandSell(player, arg1);
+            break;
+
+        case "party":
+            player.sendMessage("§7パーティ機能は準備中です。");
+            break;
+
+        case "help":
+            player.sendMessage("§e--- DeepCraft Commands ---");
+            player.sendMessage("§f!menu  : メニューを開く");
+            player.sendMessage("§f!market: マーケットを開く");
+            player.sendMessage("§f!sell <価格>: 手持ちアイテムを出品");
+            player.sendMessage("§f!help  : コマンド一覧");
+            if (player.hasTag("admin")) {
+                player.sendMessage("§c!admin : 管理者メニュー (xp, give, summon, max, reset, quest)");
+            }
+            break;
+
+        // --- 管理者用 (adminタグ必須) ---
+        case "admin":
+            if (!player.hasTag("admin")) {
+                player.sendMessage("§c権限がありません。(adminタグが必要です)");
+                return;
+            }
+            handleAdminCommand(player, args);
+            break;
+
+        default:
+            player.sendMessage(`§c不明なコマンドです: ${command}`);
+            break;
+    }
+}
+
+// 管理者コマンドの処理
+function handleAdminCommand(player, args) {
+    const sub = args[1]; // xp, give, etc.
+    const val = args[2]; // 数値やID
+
+    switch (sub) {
+        case "xp": // !admin xp 1000
+            addXP(player, parseInt(val) || 1000);
+            break;
+        case "give": // !admin give titan_axe
+            if (val) giveCustomItem(player, val);
+            else player.sendMessage("§cIDを指定してください");
+            break;
+        case "summon": // !admin summon bandit_leader
+            if (val) summonBoss(player, val);
+            else player.sendMessage("§cBossIDを指定してください");
+            break;
+        case "quest": // !admin quest hunt_zombies
+            if (val) acceptQuest(player, val);
+            else player.sendMessage("§cQuestIDを指定してください");
+            break;
+        case "max": // !admin max
+            for (const key in CONFIG.STATS) player.setDynamicProperty(`deepcraft:${key}`, 100);
+            player.setDynamicProperty("deepcraft:level", 100);
+            player.setDynamicProperty("deepcraft:ether", 1000);
+            applyStatsToEntity(player);
+            player.sendMessage("§e§l[DEBUG] 全ステータス最大化！");
+            break;
+        case "reset": // !admin reset
+            resetCurrentProfile(player);
+            break;
+        default:
+            player.sendMessage("§c使用法: !admin <xp/give/summon/quest/max/reset> [値]");
+            break;
+    }
+}
 
 // ==========================================
 //  ⚔️ Modified Combat Logic
