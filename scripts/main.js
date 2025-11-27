@@ -16,25 +16,38 @@ import { MOB_POOL } from "./data/mobs.js";
 world.afterEvents.playerSpawn.subscribe((ev) => {
     try {
         const player = ev.player;
+        
         if (!player.getDynamicProperty("deepcraft:active_profile")) {
             initializePlayer(player);
         }
-        
-        // ★コンバットログ対策 (無限ループ防止版)
-        const combatTimer = player.getDynamicProperty("deepcraft:combat_timer") || 0;
-        if (combatTimer > 0) {
-            // 先にタイマーを消す (これが重要)
+
+        // ★コンバットログ処刑 (ループ防止強化版)
+        if (player.getDynamicProperty("deepcraft:combat_logged")) {
+            // 1. まず全てのフラグを消す (最優先)
+            player.setDynamicProperty("deepcraft:combat_logged", undefined);
             player.setDynamicProperty("deepcraft:combat_timer", 0);
-            // 罰として死亡させる
+            
+            // 2. インベントリ没収
+            const inventory = player.getComponent("inventory").container;
+            for (let i = 0; i < inventory.size; i++) inventory.setItem(i, undefined);
+            
+            const equip = player.getComponent("equippable");
+            [EquipmentSlot.Head, EquipmentSlot.Chest, EquipmentSlot.Legs, EquipmentSlot.Feet, EquipmentSlot.Mainhand, EquipmentSlot.Offhand].forEach(slot => {
+                equip.setEquipment(slot, undefined);
+            });
+
+            // 3. 処刑実行
             player.runCommand("kill @s");
-            player.sendMessage("§c§l戦闘中に切断したため、死亡しました。(Combat Log)");
+            player.sendMessage("§c§l戦闘中に切断したため、アイテムを放棄して死亡しました。");
             return;
         }
 
+        // 通常のリセット
+        player.setDynamicProperty("deepcraft:combat_timer", 0); // 念のため通常ログイン時もタイマー解除
         const hp = player.getComponent("minecraft:health");
         if (hp) hp.resetToMax();
         
-        // Hitbox Desync対策
+        // Hitbox対策
         system.runTimeout(() => {
             if (player.isValid()) player.triggerEvent("scale_reset");
         }, 2);
@@ -57,9 +70,9 @@ function initializePlayer(player) {
 
 // --- System Loop (Main Cycle) ---
 
-   system.runInterval(() => {
+system.runInterval(() => {
     // 1. Player Loop
-    // ★修正: 全体のtry-catchではなく、プレイヤーごとの処理内でエラーをキャッチするように変更
+    // try-catchをforEachの中に入れることで、一人のエラーで全員のHUDが止まるのを防ぐ
     world.getAllPlayers().forEach(player => {
         try {
             if (!player.isValid()) return;
@@ -77,7 +90,6 @@ function initializePlayer(player) {
             // Ether Logic
             const maxEther = Math.floor(CONFIG.ETHER_BASE + (intelligence * CONFIG.ETHER_PER_INT));
             let currentEther = player.getDynamicProperty("deepcraft:ether") || 0;
-            // 0.1秒ごとの回復量 (1秒あたりの1/10)
             const regenRate = CONFIG.ETHER_REGEN_BASE + (willpower * CONFIG.ETHER_REGEN_PER_WILL);
             const tickRegen = regenRate / 10; 
             
@@ -86,7 +98,7 @@ function initializePlayer(player) {
                 player.setDynamicProperty("deepcraft:ether", currentEther);
             }
 
-            // コンバットタイマー処理
+            // コンバットタイマー処理 (減算)
             let combatTimer = player.getDynamicProperty("deepcraft:combat_timer") || 0;
             if (combatTimer > 0) {
                 combatTimer = Math.max(0, combatTimer - 0.1);
@@ -111,14 +123,13 @@ function initializePlayer(player) {
             }
 
             player.onScreenDisplay.setActionBar(hudText);
-
+            
             applyEquipmentPenalties(player);
             applyNumericalPassives(player);
             applyStatsToEntity(player);
 
         } catch (e) {
-            // 個別のプレイヤーのエラーはここで止める（他のプレイヤーに影響させない）
-            // console.warn(`Player Update Error: ${e}`); 
+            // エラーが発生しても、このプレイヤーだけスキップして次は実行する
         }
     });
 
@@ -128,11 +139,9 @@ function initializePlayer(player) {
             updateMobNameTag(boss);
             processBossSkillAI(boss);
         });
-    } catch (e) {
-        console.warn("Boss Loop Error: " + e);
-    }
+    } catch (e) {}
 
-}, 2); // 0.1秒ごとに実行
+}, 2); // 0.1秒更新でOK
 
 function getXpCostForLevel(level) {
     return CONFIG.XP_BASE_COST + (level * CONFIG.XP_LEVEL_MULTIPLIER);
@@ -574,7 +583,7 @@ world.afterEvents.entityDie.subscribe((ev) => {
         const victim = ev.deadEntity;
         const attacker = ev.damageSource.damagingEntity;
 
-        // 攻撃者への報酬処理
+        // (攻撃者側の処理は変更なし)
         if (attacker && attacker.typeId === "minecraft:player") {
             const questData = JSON.parse(attacker.getDynamicProperty("deepcraft:quest_data") || "{}");
             for (const qId in questData) {
@@ -590,7 +599,6 @@ world.afterEvents.entityDie.subscribe((ev) => {
                     attacker.setDynamicProperty("deepcraft:quest_data", JSON.stringify(questData));
                 }
             }
-            
             if (victim.hasTag("deepcraft:boss")) {
                 const bossId = victim.getDynamicProperty("deepcraft:boss_id");
                 const def = MOB_POOL[bossId];
@@ -622,7 +630,7 @@ world.afterEvents.entityDie.subscribe((ev) => {
         if (victim.typeId === "minecraft:player") {
             const player = victim;
             
-            // ★重要修正: 死亡したらコンバット状態を解除 (無限ループ防止)
+            // ★重要: 死亡時にコンバットタイマーを確実にリセット
             player.setDynamicProperty("deepcraft:combat_timer", 0);
 
             // 仮想HPリセット
@@ -648,7 +656,9 @@ world.afterEvents.entityDie.subscribe((ev) => {
                 try {
                     const spawnLoc = { x: location.x, y: location.y + 1.0, z: location.z };
                     const soul = player.dimension.spawnEntity("minecraft:chest_minecart", spawnLoc);
-                    soul.nameTag = "§b魂 (Soul)";
+                    soul.nameTag = `§b${player.name}の魂`;
+                    soul.setDynamicProperty("deepcraft:owner_id", player.id);
+
                     const soulContainer = soul.getComponent("inventory").container;
                     droppedItems.forEach(item => soulContainer.addItem(item));
                     player.sendMessage(`§bアイテムを魂として座標 [${Math.floor(spawnLoc.x)}, ${Math.floor(spawnLoc.y)}, ${Math.floor(spawnLoc.z)}] に残しました。`);
@@ -1204,3 +1214,71 @@ function resetCurrentProfile(player) {
     player.playSound("random.break");
     player.sendMessage(`§c[デバッグ] プロファイル スロット${currentSlot} をリセットしました。`);
 }
+
+// --- Combat Logging Prevention (Instant Drop) ---
+
+// --- Combat Logging Prevention (Instant Drop) ---
+
+world.beforeEvents.playerLeave.subscribe((ev) => {
+    const player = ev.player;
+    const combatTimer = player.getDynamicProperty("deepcraft:combat_timer") || 0;
+
+    // 戦闘中(タイマー>0)にログアウトしようとした場合
+    if (combatTimer > 0) {
+        // ★重要: system.runの中ではplayerデータが消えているため、ここで先に確保しておく
+        const playerName = player.name;
+        const playerId = player.id;
+        const dimensionId = player.dimension.id;
+        const location = { x: player.location.x, y: player.location.y, z: player.location.z };
+
+        // 1. 次回ログイン時の処刑フラグを立てる
+        player.setDynamicProperty("deepcraft:combat_logged", true);
+
+        // 2. アイテムをSoulに移す (即時ドロップ)
+        const inventory = player.getComponent("inventory").container;
+        const equip = player.getComponent("equippable");
+        let droppedItems = [];
+
+        // インベントリの中身を回収
+        for (let i = 0; i < inventory.size; i++) {
+            const item = inventory.getItem(i);
+            if (item) {
+                droppedItems.push(item.clone());
+                inventory.setItem(i, undefined); // その場で消す
+            }
+        }
+        
+        // 装備品も回収
+        [EquipmentSlot.Head, EquipmentSlot.Chest, EquipmentSlot.Legs, EquipmentSlot.Feet, EquipmentSlot.Mainhand, EquipmentSlot.Offhand].forEach(slot => {
+            const item = equip.getEquipment(slot);
+            if (item) {
+                droppedItems.push(item.clone());
+                equip.setEquipment(slot, undefined); // その場で消す
+            }
+        });
+
+        // 3. Soul生成 (システム権限で強制スポーン)
+        if (droppedItems.length > 0) {
+            system.run(() => {
+                try {
+                    // ★修正: 確保しておいたIDからディメンションを取得
+                    const targetDim = world.getDimension(dimensionId);
+                    const spawnLoc = { x: location.x, y: location.y + 1.0, z: location.z };
+                    
+                    const soul = targetDim.spawnEntity("minecraft:chest_minecart", spawnLoc);
+                    // ★修正: 確保しておいた名前を使用
+                    soul.nameTag = `§c${playerName}の逃亡跡 (Soul)`;
+                    soul.setDynamicProperty("deepcraft:owner_id", playerId);
+
+                    const soulContainer = soul.getComponent("inventory").container;
+                    droppedItems.forEach(item => soulContainer.addItem(item));
+                    
+                    // ログ出力
+                    world.sendMessage(`§c§l${playerName} が戦闘から逃亡しました！ アイテムがその場にドロップしました。`);
+                } catch(e) {
+                    console.warn("Combat Log Drop Error: " + e);
+                }
+            });
+        }
+    }
+});
