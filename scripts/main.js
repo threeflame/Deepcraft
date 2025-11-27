@@ -14,10 +14,26 @@ import { MOB_POOL } from "./data/mobs.js";
 // --- Initialization ---
 
 world.afterEvents.playerSpawn.subscribe((ev) => {
-    const player = ev.player;
-    if (!player.getDynamicProperty("deepcraft:active_profile")) {
-        initializePlayer(player);
-    }
+    try {
+        const player = ev.player;
+        
+        // 初回初期化
+        if (!player.getDynamicProperty("deepcraft:active_profile")) {
+            initializePlayer(player);
+        }
+
+        // ★修正: 仮想HPを必ず最大値にリセット (ゾンビ化防止)
+        const maxHP = player.getDynamicProperty("deepcraft:max_hp") || 100;
+        player.setDynamicProperty("deepcraft:hp", maxHP);
+
+        // ★修正: 無敵時間管理用の数値をリセット (計算バグ防止)
+        player.setDynamicProperty("deepcraft:last_hurt_tick", system.currentTick);
+
+        // バニラHPを全回復 (器の修復)
+        const hp = player.getComponent("minecraft:health");
+        if (hp) hp.resetToMax();
+        
+    } catch (e) { console.warn("Spawn Error: " + e); }
 });
 
 function initializePlayer(player) {
