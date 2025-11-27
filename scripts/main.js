@@ -36,55 +36,68 @@ function initializePlayer(player) {
 // --- System Loop (Main Cycle) ---
 
 system.runInterval(() => {
-    // 1. Player Loop
+    // 1. Player Loop (安全化)
+    // ※ try-catchをforEachの中に移動し、一人エラーが出ても全員止まらないようにする
     world.getAllPlayers().forEach(player => {
-        const level = player.getDynamicProperty("deepcraft:level") || 1;
-        const xp = player.getDynamicProperty("deepcraft:xp") || 0;
-        const reqXp = getXpCostForLevel(level);
-        
-        const intelligence = player.getDynamicProperty("deepcraft:intelligence") || 0;
-        const willpower = player.getDynamicProperty("deepcraft:willpower") || 0;
+        try {
+            if (!player.isValid()) return;
 
-        // Ether Logic
-        const maxEther = Math.floor(CONFIG.ETHER_BASE + (intelligence * CONFIG.ETHER_PER_INT));
-        let currentEther = player.getDynamicProperty("deepcraft:ether") || 0;
+            const level = player.getDynamicProperty("deepcraft:level") || 1;
+            const xp = player.getDynamicProperty("deepcraft:xp") || 0;
+            const reqXp = getXpCostForLevel(level);
+            
+            const intelligence = player.getDynamicProperty("deepcraft:intelligence") || 0;
+            const willpower = player.getDynamicProperty("deepcraft:willpower") || 0;
 
-        const regenRate = CONFIG.ETHER_REGEN_BASE + (willpower * CONFIG.ETHER_REGEN_PER_WILL);
-        const tickRegen = regenRate / 4; 
-        
-        if (currentEther < maxEther) {
-            currentEther = Math.min(maxEther, currentEther + tickRegen);
-            player.setDynamicProperty("deepcraft:ether", currentEther);
+            // Ether Logic
+            const maxEther = Math.floor(CONFIG.ETHER_BASE + (intelligence * CONFIG.ETHER_PER_INT));
+            let currentEther = player.getDynamicProperty("deepcraft:ether") || 0;
+            const regenRate = CONFIG.ETHER_REGEN_BASE + (willpower * CONFIG.ETHER_REGEN_PER_WILL);
+            const tickRegen = regenRate / 10; 
+            
+            if (currentEther < maxEther) {
+                currentEther = Math.min(maxEther, currentEther + tickRegen);
+                player.setDynamicProperty("deepcraft:ether", currentEther);
+            }
+
+            // HUD Display
+            const currentHP = Math.floor(player.getDynamicProperty("deepcraft:hp") || 100);
+            const maxHP = Math.floor(player.getDynamicProperty("deepcraft:max_hp") || 100);
+            const etherPercent = Math.max(0, Math.min(1, currentEther / maxEther));
+            const etherBarLen = 10; 
+            const etherFill = Math.ceil(etherPercent * etherBarLen);
+            const etherBarDisplay = "§b" + "■".repeat(etherFill) + "§8" + "■".repeat(etherBarLen - etherFill);
+            const gold = player.getDynamicProperty("deepcraft:gold") || 0;
+
+            player.onScreenDisplay.setActionBar(
+                `§cHP: ${currentHP}/${maxHP}   ` +
+                `§3Ether: ${etherBarDisplay} ${Math.floor(currentEther)}/${maxEther}\n` +
+                `§eLv.${level}   §fXP:${xp}/${reqXp}   §6${gold} G`
+            );
+            
+            // バニラHP回復（念のため）
+            const vanillaHp = player.getComponent("minecraft:health");
+            if (vanillaHp && vanillaHp.currentValue < 100) vanillaHp.resetToMax();
+
+            applyEquipmentPenalties(player);
+            applyNumericalPassives(player);
+            applyStatsToEntity(player);
+
+        } catch (e) {
+            // 個別のプレイヤーエラーはここで吸収し、他プレイヤーに影響させない
+            // console.warn(`Player Loop Error (${player.name}): ${e}`);
         }
-
-        // 仮想HP取得
-        const currentHP = Math.floor(player.getDynamicProperty("deepcraft:hp") || 100);
-        const maxHP = Math.floor(player.getDynamicProperty("deepcraft:max_hp") || 100);
-        
-        // HUD Display
-        const etherPercent = Math.max(0, Math.min(1, currentEther / maxEther));
-        const etherBarLen = 10; 
-        const etherFill = Math.ceil(etherPercent * etherBarLen);
-        const etherBarDisplay = "§b" + "■".repeat(etherFill) + "§8" + "■".repeat(etherBarLen - etherFill);
-
-        player.onScreenDisplay.setActionBar(
-            `§cHP: ${currentHP}/${maxHP}   ` +
-            `§3Ether: ${etherBarDisplay} ${Math.floor(currentEther)}/${maxEther}\n` +
-            `§eLv.${level}   §fXP:${xp}/${reqXp}   §6${player.getDynamicProperty("deepcraft:gold")||0} G`
-        );
-
-        applyEquipmentPenalties(player);
-        applyNumericalPassives(player);
-        applyStatsToEntity(player);
     });
 
-    // 2. Boss Loop (HPバー更新 & AI)
-    world.getDimension("overworld").getEntities({ tags: ["deepcraft:boss"] }).forEach(boss => {
-        updateMobNameTag(boss);
-        processBossSkillAI(boss);
-    });
+    // 2. Boss Loop
+    try {
+        world.getDimension("overworld").getEntities({ tags: ["deepcraft:boss"] }).forEach(boss => {
+            updateMobNameTag(boss);
+            processBossSkillAI(boss);
+        });
+    } catch (e) { console.warn("Boss Loop Error: " + e); }
 
-}, 5);
+}, 2); // 0.1秒ごとに実行
 
 function getXpCostForLevel(level) {
     return CONFIG.XP_BASE_COST + (level * CONFIG.XP_LEVEL_MULTIPLIER);
@@ -440,84 +453,112 @@ function getEquipmentStats(itemStack) {
     return def.stats;
 }
 
+// --- Entity Death (修正版: Soul生成の安定化) ---
+
 world.afterEvents.entityDie.subscribe((ev) => {
-    const victim = ev.deadEntity;
-    const attacker = ev.damageSource.damagingEntity;
+    try {
+        const victim = ev.deadEntity;
+        const attacker = ev.damageSource.damagingEntity;
 
-    if (attacker && attacker.typeId === "minecraft:player") {
-        const questData = JSON.parse(attacker.getDynamicProperty("deepcraft:quest_data") || "{}");
-        for (const qId in questData) {
-            const q = questData[qId];
-            const def = QUEST_POOL[qId];
-            if (q.status === "active" && def.type === "kill" && def.target === victim.typeId) {
-                q.progress++;
-                if (q.progress >= def.amount) {
-                    q.status = "completed";
-                    attacker.playSound("random.levelup");
-                    attacker.sendMessage(`§aクエスト完了: ${def.name}`);
-                }
-                attacker.setDynamicProperty("deepcraft:quest_data", JSON.stringify(questData));
-            }
-        }
-        
-        if (victim.hasTag("deepcraft:boss")) {
-            const bossId = victim.getDynamicProperty("deepcraft:boss_id");
-            const def = MOB_POOL[bossId];
-            if (def && def.drops) {
-                def.drops.forEach(drop => {
-                    if (drop.chance && Math.random() > drop.chance) return;
-                    if (drop.type === "xp") {
-                        addXP(attacker, drop.amount);
-                        attacker.sendMessage(`§eボス撃破！ +${drop.amount} XP`);
+        // 攻撃者への報酬処理
+        if (attacker && attacker.typeId === "minecraft:player") {
+            const questData = JSON.parse(attacker.getDynamicProperty("deepcraft:quest_data") || "{}");
+            for (const qId in questData) {
+                const q = questData[qId];
+                const def = QUEST_POOL[qId];
+                if (q.status === "active" && def.type === "kill" && def.target === victim.typeId) {
+                    q.progress++;
+                    if (q.progress >= def.amount) {
+                        q.status = "completed";
+                        attacker.playSound("random.levelup");
+                        attacker.sendMessage(`§aクエスト完了: ${def.name}`);
                     }
-                    if (drop.type === "item") {
-                        const itemDef = EQUIPMENT_POOL[drop.id];
-                        if (itemDef) {
-                            const item = new ItemStack(itemDef.baseItem, 1);
-                            item.nameTag = itemDef.name;
-                            item.setLore(itemDef.lore);
-                            item.setDynamicProperty("deepcraft:item_id", drop.id);
-                            attacker.dimension.spawnItem(item, victim.location);
-                            attacker.sendMessage(`§6§lレアドロップ！ §r獲得: ${itemDef.name}`);
+                    attacker.setDynamicProperty("deepcraft:quest_data", JSON.stringify(questData));
+                }
+            }
+            
+            if (victim.hasTag("deepcraft:boss")) {
+                const bossId = victim.getDynamicProperty("deepcraft:boss_id");
+                const def = MOB_POOL[bossId];
+                if (def && def.drops) {
+                    def.drops.forEach(drop => {
+                        if (drop.chance && Math.random() > drop.chance) return;
+                        if (drop.type === "xp") {
+                            addXP(attacker, drop.amount);
+                            attacker.sendMessage(`§eボス撃破！ +${drop.amount} XP`);
                         }
-                    }
-                });
-            }
-        }
-        if (attacker.hasTag("talent:exp_boost")) addXP(attacker, 50);
-    }
-
-    if (victim.typeId === "minecraft:player") {
-        const player = victim;
-        player.setDynamicProperty("deepcraft:hp", player.getDynamicProperty("deepcraft:max_hp"));
-
-        const lostXP = player.getDynamicProperty("deepcraft:xp") || 0;
-        player.setDynamicProperty("deepcraft:xp", 0);
-        if (lostXP > 0) player.sendMessage(`§c死亡により ${lostXP} XPを失いました...`);
-
-        const inventory = player.getComponent("inventory").container;
-        const location = player.location;
-        let droppedItems = [];
-        for (let i = 0; i < inventory.size; i++) {
-            const item = inventory.getItem(i);
-            if (item) {
-                if (Math.random() < CONFIG.DEATH_ITEM_DROP_RATE) {
-                    droppedItems.push(item.clone());
-                    inventory.setItem(i, null);
+                        if (drop.type === "item") {
+                            const itemDef = EQUIPMENT_POOL[drop.id];
+                            if (itemDef) {
+                                const item = new ItemStack(itemDef.baseItem, 1);
+                                item.nameTag = itemDef.name;
+                                item.setLore(itemDef.lore);
+                                item.setDynamicProperty("deepcraft:item_id", drop.id);
+                                attacker.dimension.spawnItem(item, victim.location);
+                                attacker.sendMessage(`§6§lレアドロップ！ §r獲得: ${itemDef.name}`);
+                            }
+                        }
+                    });
                 }
             }
+            if (attacker.hasTag("talent:exp_boost")) addXP(attacker, 50);
         }
-        if (droppedItems.length > 0) {
-            const spawnLoc = { x: location.x, y: location.y + 1.0, z: location.z };
-            try {
-                const soul = player.dimension.spawnEntity("minecraft:chest_minecart", spawnLoc);
-                soul.nameTag = "§b魂 (Soul)";
-                const soulContainer = soul.getComponent("inventory").container;
-                droppedItems.forEach(item => soulContainer.addItem(item));
-                player.sendMessage(`§bアイテムを魂として座標 [${Math.floor(spawnLoc.x)}, ${Math.floor(spawnLoc.y)}, ${Math.floor(spawnLoc.z)}] に残しました。`);
-            } catch (e) {}
+
+        // プレイヤー死亡時の処理 (Soul生成)
+        if (victim.typeId === "minecraft:player") {
+            const player = victim;
+            
+            // 仮想HPリセット
+            player.setDynamicProperty("deepcraft:hp", player.getDynamicProperty("deepcraft:max_hp"));
+            
+            // XPロスト
+            const lostXP = player.getDynamicProperty("deepcraft:xp") || 0;
+            player.setDynamicProperty("deepcraft:xp", 0);
+            if (lostXP > 0) player.sendMessage(`§c死亡により ${lostXP} XPを失いました...`);
+
+            // アイテム保存ロジック
+            const inventory = player.getComponent("inventory").container;
+            const deathDimension = player.dimension;
+            const deathLocation = player.location; // 死亡座標を確保
+
+            let droppedItems = [];
+            for (let i = 0; i < inventory.size; i++) {
+                const item = inventory.getItem(i);
+                if (item) {
+                    if (Math.random() < CONFIG.DEATH_ITEM_DROP_RATE) {
+                        droppedItems.push(item.clone());
+                        inventory.setItem(i, null);
+                    }
+                }
+            }
+
+            // Soul生成を1tick遅らせることで、死亡直後の不安定な状態や同時死亡の競合を回避
+            if (droppedItems.length > 0) {
+                system.runTimeout(() => {
+                    try {
+                        const spawnLoc = { x: deathLocation.x, y: deathLocation.y + 1.0, z: deathLocation.z };
+                        const soul = deathDimension.spawnEntity("minecraft:chest_minecart", spawnLoc);
+                        soul.nameTag = "§b魂 (Soul)";
+                        
+                        // Soulの所有権を設定（マルチプレイ用：他人が開けられないようにする拡張用）
+                        soul.setDynamicProperty("owner_id", player.id);
+                        soul.setDynamicProperty("is_soul", true);
+
+                        const soulContainer = soul.getComponent("inventory").container;
+                        droppedItems.forEach(item => soulContainer.addItem(item));
+                        
+                        // プレイヤーに通知（リスポーン後に届く可能性が高い）
+                        const returningPlayer = world.getAllPlayers().find(p => p.id === player.id);
+                        if (returningPlayer) {
+                            returningPlayer.sendMessage(`§bアイテムを魂として座標 [${Math.floor(spawnLoc.x)}, ${Math.floor(spawnLoc.y)}, ${Math.floor(spawnLoc.z)}] に残しました。`);
+                        }
+                    } catch (e) {
+                        console.warn("Soul Spawn Error: " + e);
+                    }
+                }, 1); // 1tick遅延
+            }
         }
-    }
+    } catch(e) { console.warn("Entity Die Error: " + e); }
 });
 
 function acceptQuest(player, questId) {
