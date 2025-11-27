@@ -1,6 +1,32 @@
 // BP/scripts/data/mobs.js
 
 export const MOB_POOL = {
+    "training_dummy": {
+        name: "§e§lTraining Dummy",
+        type: "minecraft:husk",      // 日光で燃えないハスクを使用
+        health: 1000,                // 検証用に超高体力に設定
+        scale: 1.0,
+        speed: 0.0,                  // 移動させない
+        equipment: {
+            // 防具なし（素のダメージ検証用）
+        },
+        drops: [
+            { type: "xp", amount: 10 } // 倒した時のご褒美（微量）
+        ],
+        skills: [
+            {
+                id: "damage_log",
+                chance: 1.0, // 被ダメージ時に100%発動（カウンター判定を利用）
+                action: (entity) => {
+                    // ここにダメージログを出せれば理想的ですが、
+                    // 現在のシステムでは被弾時にチャットログを出す機能は組み込まれていないため、
+                    // 攻撃されたときにパーティクルを出して「ヒット判定」を可視化します。
+                    entity.dimension.spawnParticle("minecraft:villager_angry", entity.location);
+                }
+            }
+        ]
+    },
+    
     "bandit_leader": {
         name: "§c§lBandit Leader",
         type: "minecraft:husk", 
