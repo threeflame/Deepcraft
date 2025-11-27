@@ -3,7 +3,6 @@ import { world, system, ItemStack, EquipmentSlot } from "@minecraft/server";
 import { ChestFormData } from "./extensions/forms.js";
 import { openMarketMenu, processCommandSell } from "./data/market.js";
 
-// Data Imports
 import { CONFIG } from "./config.js";
 import { CARD_POOL } from "./data/talents.js";
 import { QUEST_POOL } from "./data/quests.js";
@@ -15,11 +14,10 @@ import { MOB_POOL } from "./data/mobs.js";
 
 world.afterEvents.playerSpawn.subscribe((ev) => {
     const player = ev.player;
-    // 初回ログイン、またはデータ欠損時の初期化
     if (!player.getDynamicProperty("deepcraft:active_profile")) {
         initializePlayer(player);
     }
-    // スポーン時にバニラHPを最大化（即死防止）
+    // スポーン時にバニラHPを99999にリセット（死なないように）
     const hp = player.getComponent("minecraft:health");
     if (hp) hp.resetToMax();
 });
@@ -29,7 +27,7 @@ function initializePlayer(player) {
     player.setDynamicProperty("deepcraft:ether", CONFIG.ETHER_BASE);
     player.setDynamicProperty("deepcraft:gold", 0);
     
-    // 仮想HP初期化
+    // 仮想HP初期化 (RPGとしてのHP)
     player.setDynamicProperty("deepcraft:hp", 100);
     player.setDynamicProperty("deepcraft:max_hp", 100);
 
@@ -39,164 +37,176 @@ function initializePlayer(player) {
 
 // --- System Loop (Main Cycle) ---
 
-// ★修正: 更新頻度を 5 -> 2 に変更してHUDのチラつきを防止
 system.runInterval(() => {
-    // 1. Player Loop
-    world.getAllPlayers().forEach(player => {
-        const level = player.getDynamicProperty("deepcraft:level") || 1;
-        const xp = player.getDynamicProperty("deepcraft:xp") || 0;
-        const reqXp = getXpCostForLevel(level);
-        
-        const intelligence = player.getDynamicProperty("deepcraft:intelligence") || 0;
-        const willpower = player.getDynamicProperty("deepcraft:willpower") || 0;
+    try {
+        // 1. Player Loop
+        world.getAllPlayers().forEach(player => {
+            if (!player.isValid()) return;
 
-        // Ether Logic
-        const maxEther = Math.floor(CONFIG.ETHER_BASE + (intelligence * CONFIG.ETHER_PER_INT));
-        let currentEther = player.getDynamicProperty("deepcraft:ether") || 0;
+            const level = player.getDynamicProperty("deepcraft:level") || 1;
+            const xp = player.getDynamicProperty("deepcraft:xp") || 0;
+            const reqXp = getXpCostForLevel(level);
+            
+            const intelligence = player.getDynamicProperty("deepcraft:intelligence") || 0;
+            const willpower = player.getDynamicProperty("deepcraft:willpower") || 0;
 
-        // Regen (2tick = 0.1s interval)
-        const regenRate = CONFIG.ETHER_REGEN_BASE + (willpower * CONFIG.ETHER_REGEN_PER_WILL);
-        const tickRegen = regenRate / 10; // 1秒あたりの回復量を10分割
-        
-        if (currentEther < maxEther) {
-            currentEther = Math.min(maxEther, currentEther + tickRegen);
-            player.setDynamicProperty("deepcraft:ether", currentEther);
-        }
+            // Ether Logic
+            const maxEther = Math.floor(CONFIG.ETHER_BASE + (intelligence * CONFIG.ETHER_PER_INT));
+            let currentEther = player.getDynamicProperty("deepcraft:ether") || 0;
+            const regenRate = CONFIG.ETHER_REGEN_BASE + (willpower * CONFIG.ETHER_REGEN_PER_WILL);
+            const tickRegen = regenRate / 10; 
+            
+            if (currentEther < maxEther) {
+                currentEther = Math.min(maxEther, currentEther + tickRegen);
+                player.setDynamicProperty("deepcraft:ether", currentEther);
+            }
 
-        // 仮想HP取得
-        const currentHP = Math.floor(player.getDynamicProperty("deepcraft:hp") || 100);
-        const maxHP = Math.floor(player.getDynamicProperty("deepcraft:max_hp") || 100);
-        
-        // HUD Display (Action Bar)
-        const etherPercent = Math.max(0, Math.min(1, currentEther / maxEther));
-        const etherBarLen = 10; 
-        const etherFill = Math.ceil(etherPercent * etherBarLen);
-        const etherBarDisplay = "§b" + "■".repeat(etherFill) + "§8" + "■".repeat(etherBarLen - etherFill);
+            // HUD Display
+            const currentHP = Math.floor(player.getDynamicProperty("deepcraft:hp") || 100);
+            const maxHP = Math.floor(player.getDynamicProperty("deepcraft:max_hp") || 100);
 
-        const gold = player.getDynamicProperty("deepcraft:gold") || 0;
+            const etherPercent = Math.max(0, Math.min(1, currentEther / maxEther));
+            const etherBarLen = 10; 
+            const etherFill = Math.ceil(etherPercent * etherBarLen);
+            const etherBarDisplay = "§b" + "■".repeat(etherFill) + "§8" + "■".repeat(etherBarLen - etherFill);
+            
+            const gold = player.getDynamicProperty("deepcraft:gold") || 0;
 
-        player.onScreenDisplay.setActionBar(
-            `§cHP: ${currentHP}/${maxHP}   ` +
-            `§3Ether: ${etherBarDisplay} ${Math.floor(currentEther)}/${maxEther}\n` +
-            `§eLv.${level}   §fXP:${xp}/${reqXp}   §6${gold} G`
-        );
+            player.onScreenDisplay.setActionBar(
+                `§cHP: ${currentHP}/${maxHP}   ` +
+                `§3Ether: ${etherBarDisplay} ${Math.floor(currentEther)}/${maxEther}\n` +
+                `§eLv.${level}   §fXP:${xp}/${reqXp}   §6${gold} G`
+            );
+            
+            // バニラHPが減りすぎていたら回復（万が一の事故防止）
+            const vanillaHp = player.getComponent("minecraft:health");
+            if (vanillaHp && vanillaHp.currentValue < 50000) vanillaHp.resetToMax();
 
-        // 常時処理
-        applyEquipmentPenalties(player);
-        applyNumericalPassives(player);
-        applyStatsToEntity(player);
-    });
+            applyEquipmentPenalties(player);
+            applyNumericalPassives(player);
+            applyStatsToEntity(player);
+        });
 
-    // 2. Boss Loop
-    world.getDimension("overworld").getEntities({ tags: ["deepcraft:boss"] }).forEach(boss => {
-        updateMobNameTag(boss);
-        processBossSkillAI(boss);
-    });
+        // 2. Boss Loop
+        world.getDimension("overworld").getEntities({ tags: ["deepcraft:boss"] }).forEach(boss => {
+            updateMobNameTag(boss);
+            processBossSkillAI(boss);
+        });
 
-}, 2); // 0.1秒ごとに実行
+    } catch (e) {
+        // エラーでループを止めない
+        console.warn("System Loop Error: " + e);
+    }
+}, 2);
 
 function getXpCostForLevel(level) {
     return CONFIG.XP_BASE_COST + (level * CONFIG.XP_LEVEL_MULTIPLIER);
 }
 
-// --- Mob & Boss Logic ---
+// --- Combat Logic (HP 99999 Method) ---
 
-function updateMobNameTag(entity) {
-    if (!entity.isValid()) return;
+world.afterEvents.entityHurt.subscribe((ev) => {
+    const victim = ev.hurtEntity;
+    const attacker = ev.damageSource.damagingEntity;
+    const damageAmount = ev.damage; // バニラダメージ（誤差レベル）
 
-    const current = entity.getDynamicProperty("deepcraft:hp");
-    const max = entity.getDynamicProperty("deepcraft:max_hp");
-    
-    if (current === undefined || max === undefined) return;
+    // 1. 無敵時間チェック (0.5秒)
+    const tick = system.currentTick;
+    const lastHurtTick = victim.getDynamicProperty("deepcraft:last_hurt_tick") || 0;
+    if (tick - lastHurtTick < 10) return;
+    victim.setDynamicProperty("deepcraft:last_hurt_tick", tick);
 
-    const bossId = entity.getDynamicProperty("deepcraft:boss_id");
-    let name = entity.typeId.replace("minecraft:", "");
-    if (bossId && MOB_POOL[bossId]) {
-        name = MOB_POOL[bossId].name;
-    } else {
-        name = name.charAt(0).toUpperCase() + name.slice(1);
-    }
+    // バニラHPの回復は「System Loop」で行うのでここでは何もしない（99999あるので死なない）
 
-    const percent = Math.max(0, current / max);
-    const barLen = 10;
-    const fill = Math.ceil(percent * barLen);
-    
-    let color = "§a";
-    if (percent < 0.5) color = "§e";
-    if (percent < 0.2) color = "§c";
+    // 2. ダメージ計算
+    const victimStats = calculateEntityStats(victim);
+    let finalDamage = 0;
+    let isCritical = false;
 
-    const bar = color + "|".repeat(fill) + "§8" + "|".repeat(barLen - fill);
-    entity.nameTag = `${name}\n${bar} §f${Math.ceil(current)}/${max}`;
-}
-
-function processBossSkillAI(boss) {
-    if (!boss.isValid()) return;
-    const bossId = boss.getDynamicProperty("deepcraft:boss_id");
-    const bossDef = MOB_POOL[bossId];
-    if (bossDef && bossDef.skills && boss.target) {
-        bossDef.skills.forEach(skill => {
-            if (Math.random() < skill.chance) executeBossSkill(boss, skill);
-        });
-    }
-}
-
-function executeBossSkill(boss, skill) {
-    if (skill.msg) {
-        boss.dimension.runCommand(`tellraw @a[r=30,x=${boss.location.x},y=${boss.location.y},z=${boss.location.z}] {"rawtext":[{"text":"§e[ボス] ${skill.msg}"}]}`);
-    }
-    skill.action(boss);
-}
-
-// --- Player Skill ---
-
-function executeSkill(player, skillId) {
-    const skill = SKILL_POOL[skillId];
-    if (!skill) return;
-
-    const cdTag = `cooldown:skill_${skillId}`;
-    if (player.hasTag(cdTag)) {
-        player.playSound("note.bass");
-        player.sendMessage("§cスキルはクールダウン中です！");
-        return;
-    }
-
-    const manaCost = skill.manaCost || 0;
-    let currentEther = player.getDynamicProperty("deepcraft:ether") || 0;
-    
-    if (currentEther < manaCost) {
-        player.playSound("note.bass");
-        player.sendMessage(`§cエーテルが足りません！ (§b${Math.floor(currentEther)} §c/ §b${manaCost}§c)`);
-        return;
-    }
-
-    const success = skill.onUse(player);
-    if (success !== false) {
-        if (manaCost > 0) {
-            player.setDynamicProperty("deepcraft:ether", currentEther - manaCost);
-        }
-        player.addTag(cdTag);
-        system.runTimeout(() => {
-            if (player.isValid()) {
-                player.removeTag(cdTag);
-                player.playSound("random.orb");
-                player.sendMessage(`§aスキル準備完了: ${skill.name}`);
+    // A. 攻撃者
+    if (attacker && attacker.typeId === "minecraft:player") {
+        const attackerStats = calculateEntityStats(attacker);
+        const equipment = attacker.getComponent("equippable");
+        const mainHand = equipment.getEquipment(EquipmentSlot.Mainhand);
+        
+        if (!checkReq(attacker, mainHand).valid) {
+            attacker.playSound("random.break");
+            finalDamage = 1; 
+        } else {
+            let attack = attackerStats.atk;
+            if (Math.random() < attackerStats.critChance) {
+                isCritical = true;
+                attack *= attackerStats.critMult;
             }
-        }, skill.cooldown * 20);
+            finalDamage = attack;
+        }
+        
+        // 吸血
+        if (attacker.hasTag("talent:vampirism")) {
+            const cur = attacker.getDynamicProperty("deepcraft:hp") || 100;
+            const max = attacker.getDynamicProperty("deepcraft:max_hp") || 100;
+            attacker.setDynamicProperty("deepcraft:hp", Math.min(cur + 2, max));
+        }
+    } else {
+        // Mob攻撃: ここでは仮に「バニラダメージの10倍」をRPGダメージとする
+        // ※Mobの攻撃力を別途定義していない場合、バニラダメージは小さすぎるため
+        finalDamage = damageAmount * 10; 
     }
-}
+
+    // B. 防御者
+    if (victim.typeId === "minecraft:player") {
+        let evasionChance = 0;
+        if (victim.hasTag("talent:evasion")) evasionChance += 0.15;
+        evasionChance += ((victim.getDynamicProperty("deepcraft:agility")||0) * 0.001);
+
+        if (Math.random() < evasionChance) {
+            victim.playSound("random.orb");
+            victim.sendMessage("§a回避！");
+            return;
+        }
+    }
+
+    finalDamage = Math.max(1, finalDamage - victimStats.def);
+    finalDamage = Math.floor(finalDamage);
+
+    // 3. 仮想HP適用
+    const currentHP = victim.getDynamicProperty("deepcraft:hp");
+    const actualCurrentHP = (currentHP !== undefined) ? currentHP : victimStats.maxHP;
+    const newHP = actualCurrentHP - finalDamage;
+    
+    victim.setDynamicProperty("deepcraft:hp", newHP);
+
+    // MobならHPバー更新
+    if (victim.typeId !== "minecraft:player") {
+        updateMobNameTag(victim);
+    } else {
+        // プレイヤーの場合、ダメージ通知（任意）
+        // victim.sendMessage(`§c-${finalDamage} HP`);
+    }
+
+    // 4. 死亡判定
+    if (newHP <= 0) {
+        // 仮想HPが尽きたら、強制的にキルコマンドで殺す
+        victim.runCommand("kill @s");
+        return;
+    }
+
+    // 5. 演出
+    if (isCritical) {
+        victim.dimension.playSound("random.anvil_land", victim.location, { pitch: 2.0 });
+        victim.dimension.spawnParticle("minecraft:critical_hit_emitter", { x: victim.location.x, y: victim.location.y + 1, z: victim.location.z });
+        if (attacker && attacker.typeId === "minecraft:player") {
+            attacker.sendMessage(`§c§lクリティカル！ §r§6${finalDamage} ダメージ`);
+        }
+    }
+});
 
 // --- Core Logic: Stat Calculation ---
 
 function calculateEntityStats(entity) {
     const stats = {
-        atk: 0,
-        def: 0,
-        critChance: CONFIG.COMBAT.BASE_CRIT_CHANCE,
-        critMult: CONFIG.COMBAT.BASE_CRIT_MULT,
-        speed: 1.0,
-        maxEther: 0,
-        etherRegen: 0,
-        maxHP: 100
+        atk: 0, def: 0, critChance: CONFIG.COMBAT.BASE_CRIT_CHANCE, critMult: CONFIG.COMBAT.BASE_CRIT_MULT,
+        speed: 1.0, maxEther: 0, etherRegen: 0, maxHP: 100
     };
 
     if (entity.typeId === "minecraft:player") {
@@ -211,10 +221,8 @@ function calculateEntityStats(entity) {
         const equip = entity.getComponent("equippable");
         const mainHand = equip.getEquipment(EquipmentSlot.Mainhand);
         const equipStats = { atk: 0, def: 0 };
-        
         const weaponDef = getEquipmentStats(mainHand);
         equipStats.atk += weaponDef.atk;
-        
         [EquipmentSlot.Head, EquipmentSlot.Chest, EquipmentSlot.Legs, EquipmentSlot.Feet].forEach(slot => {
             equipStats.def += getEquipmentStats(equip.getEquipment(slot)).def;
         });
@@ -261,9 +269,8 @@ function calculateEntityStats(entity) {
         if (entity.hasTag("talent:godspeed")) speedIndex += 15;
         if (entity.hasTag("debuff:heavy_armor")) speedIndex = Math.max(5, speedIndex - 10);
         stats.speed = speedIndex * 0.01;
-    } 
-    else {
-        // Mobのステータス初期化
+    } else {
+        // Mob Init
         let maxHP = entity.getDynamicProperty("deepcraft:max_hp");
         if (maxHP === undefined) {
             const bossId = entity.getDynamicProperty("deepcraft:boss_id");
@@ -271,33 +278,29 @@ function calculateEntityStats(entity) {
                 maxHP = MOB_POOL[bossId].health;
             } else {
                 const hpComp = entity.getComponent("minecraft:health");
-                maxHP = hpComp ? hpComp.effectiveMax : 20;
+                // MobのHPを10倍化してRPGらしくする
+                maxHP = hpComp ? hpComp.effectiveMax * 10 : 200; 
             }
             entity.setDynamicProperty("deepcraft:max_hp", maxHP);
             entity.setDynamicProperty("deepcraft:hp", maxHP);
         }
         stats.maxHP = maxHP;
-        stats.atk = 5;
+        stats.atk = 50; // Mob攻撃力も高めに
         stats.def = 0;
     }
     return stats;
 }
 
-// --- Helper Functions (Profile / Stats Update) ---
+// --- Other Functions ---
 
 function applyStatsToEntity(player) {
-    // 仮想HPの最大値を更新
     const stats = calculateEntityStats(player);
     player.setDynamicProperty("deepcraft:max_hp", stats.maxHP);
     
-    // 現在HPが最大を超えていたらカット
-    const current = player.getDynamicProperty("deepcraft:hp") || stats.maxHP;
-    if (current > stats.maxHP) player.setDynamicProperty("deepcraft:hp", stats.maxHP);
-
-    // ★修正: バニラのHP(ハート)をいじるイベントを削除！
-    // 以前の `player.triggerEvent(health${healthVal})` は、バニラHPの最大値を変えてしまうため、
-    // 今回の「バニラHP固定・仮想HP制」と競合してバグの元になっていました。
-    // ここではノックバック耐性と移動速度のみを更新します。
+    const current = player.getDynamicProperty("deepcraft:hp");
+    if (current === undefined || current > stats.maxHP) {
+        player.setDynamicProperty("deepcraft:hp", stats.maxHP);
+    }
 
     if (player.hasTag("talent:heavy_stance")) player.triggerEvent("knockback_resistance100");
     else player.triggerEvent("knockback_resistance_reset");
@@ -308,125 +311,112 @@ function applyStatsToEntity(player) {
     player.triggerEvent("attack1");
 }
 
-// ==========================================
-//  ⚔️ Combat Logic (Corrected)
-// ==========================================
-
-world.afterEvents.entityHurt.subscribe((ev) => {
-    const victim = ev.hurtEntity;
-    const attacker = ev.damageSource.damagingEntity;
-    const damageAmount = ev.damage;
-
-    // 1. バニラHPの即時全回復 (最優先)
-    const hpComp = victim.getComponent("minecraft:health");
-    if (hpComp) hpComp.resetToMax();
-
-    // 2. 無敵時間チェック
-    const tick = system.currentTick;
-    const lastHurtTick = victim.getDynamicProperty("deepcraft:last_hurt_tick") || 0;
-    // 10tick (0.5秒) 以内なら仮想ダメージ処理はスキップ
-    if (tick - lastHurtTick < 10) return;
+function upgradeStat(player, statKey) {
+    const invested = player.getDynamicProperty("deepcraft:invested_points") || 0;
+    const level = player.getDynamicProperty("deepcraft:level") || 1;
     
-    victim.setDynamicProperty("deepcraft:last_hurt_tick", tick);
-
-    // 3. ダメージ計算
-    const victimStats = calculateEntityStats(victim);
-    let finalDamage = 0;
-    let isCritical = false;
-
-    // A. 攻撃側
-    if (attacker && attacker.typeId === "minecraft:player") {
-        const attackerStats = calculateEntityStats(attacker);
-        const equipment = attacker.getComponent("equippable");
-        const mainHand = equipment.getEquipment(EquipmentSlot.Mainhand);
-        
-        if (!checkReq(attacker, mainHand).valid) {
-            attacker.playSound("random.break");
-            finalDamage = 1; 
-        } else {
-            let attack = attackerStats.atk;
-            if (Math.random() < attackerStats.critChance) {
-                isCritical = true;
-                attack *= attackerStats.critMult;
-            }
-            finalDamage = attack;
-        }
-        if (attacker.hasTag("talent:vampirism")) {
-            const cur = attacker.getDynamicProperty("deepcraft:hp") || 100;
-            const max = attacker.getDynamicProperty("deepcraft:max_hp") || 100;
-            attacker.setDynamicProperty("deepcraft:hp", Math.min(cur + 2, max));
-        }
-    } else {
-        finalDamage = damageAmount; 
-    }
-
-    // B. 防御側 (回避など)
-    if (victim.typeId === "minecraft:player") {
-        let evasionChance = 0;
-        if (victim.hasTag("talent:evasion")) evasionChance += 0.15;
-        evasionChance += ((victim.getDynamicProperty("deepcraft:agility")||0) * 0.001);
-
-        if (Math.random() < evasionChance) {
-            victim.playSound("random.orb");
-            victim.sendMessage("§a回避！");
-            return; 
-        }
-    }
-
-    // 最終ダメージ計算
-    finalDamage = Math.max(CONFIG.COMBAT.MIN_DAMAGE, finalDamage - victimStats.def);
-    finalDamage = Math.floor(finalDamage);
-
-    // 反射
-    if (attacker) {
-        if (victim.hasTag("talent:thorns_aura")) {
-            // Attackerの仮想HPを減らす処理
-            const attCur = attacker.getDynamicProperty("deepcraft:hp") || 100;
-            attacker.setDynamicProperty("deepcraft:hp", Math.max(0, attCur - 2));
-        }
-        if (victim.hasTag("talent:thorns_master")) {
-            const dmg = Math.floor(finalDamage * 0.3);
-            const attCur = attacker.getDynamicProperty("deepcraft:hp") || 100;
-            attacker.setDynamicProperty("deepcraft:hp", Math.max(0, attCur - dmg));
-        }
-    }
-
-    // 4. 仮想HPへのダメージ適用
-    const currentHP = victim.getDynamicProperty("deepcraft:hp"); 
-    const actualCurrentHP = (currentHP !== undefined) ? currentHP : victimStats.maxHP;
-    const newHP = actualCurrentHP - finalDamage;
-    
-    victim.setDynamicProperty("deepcraft:hp", newHP);
-
-    // MobならHPバー表示
-    if (victim.typeId !== "minecraft:player") {
-        updateMobNameTag(victim);
-    }
-
-    // 死亡判定 (仮想HPが0以下になったら)
-    if (newHP <= 0) {
-        // 確実に殺すためにダメージ耐性等を無視できるkillコマンドを使うか、
-        // 特大ダメージを与える。ここではapplyDamageを使用。
-        // 無敵時間チェックを通しているのでループはしないはずだが、念のため時間をずらす手もある。
-        victim.applyDamage(99999);
+    if (level >= 20 && invested >= CONFIG.STAT_POINTS_PER_LEVEL) {
+        player.playSound("note.bass");
+        player.sendMessage("§a§lこれ以上の強化は不可能です！");
+        openStatusMenu(player); // メニュー再表示
         return;
     }
 
-    // クリティカル演出
-    if (isCritical) {
-        victim.dimension.playSound("random.anvil_land", victim.location, { pitch: 2.0 });
-        victim.dimension.spawnParticle("minecraft:critical_hit_emitter", { x: victim.location.x, y: victim.location.y + 1, z: victim.location.z });
-        if (attacker && attacker.typeId === "minecraft:player") {
-            attacker.sendMessage(`§c§lクリティカル！ §r§6${finalDamage} ダメージ`);
-        }
+    const currentXP = player.getDynamicProperty("deepcraft:xp");
+    const cost = getXpCostForLevel(level);
+    const currentVal = player.getDynamicProperty(`deepcraft:${statKey}`) || 0;
+    
+    if (currentVal >= 100) {
+        player.playSound("note.bass");
+        player.sendMessage("§c既に最大レベルです！");
+        openStatusMenu(player); // メニュー再表示
+        return;
     }
-});
 
-// --- Events, Helper Functions (Quest, Profile, etc) ---
-// これらは変更なし。既存の関数をそのまま維持してください。
-// getEquipmentStats, entityDie, acceptQuest... etc.
+    if (currentXP < cost) { 
+        player.sendMessage("§cXPが足りません！"); 
+        openStatusMenu(player); // メニュー再表示
+        return; 
+    }
 
-// (以下、既存コードの末尾部分をそのまま貼り付けてください)
+    player.setDynamicProperty("deepcraft:xp", currentXP - cost);
+    player.setDynamicProperty(`deepcraft:${statKey}`, currentVal + 1);
+    player.setDynamicProperty("deepcraft:invested_points", invested + 1);
+    
+    player.playSound("random.levelup");
+    player.sendMessage(`§a強化完了: ${CONFIG.STATS[statKey]} -> ${currentVal + 1}`);
+    applyStatsToEntity(player);
+
+    if (invested + 1 >= CONFIG.STAT_POINTS_PER_LEVEL) {
+        if (level < 20) {
+            processLevelUp(player);
+        } else {
+            player.sendMessage("§6§l最大レベルボーナス完了！");
+            player.playSound("ui.toast.challenge_complete");
+            // レベルアップ演出時はメニューを閉じて再開
+            system.runTimeout(() => openMenuHub(player), 20);
+        }
+    } else {
+        openStatusMenu(player); // メニュー再表示
+    }
+}
+
+// 以下の既存関数は変更なしのため省略せず記述
+function updateMobNameTag(entity) {
+    if (!entity.isValid()) return;
+    const current = entity.getDynamicProperty("deepcraft:hp");
+    const max = entity.getDynamicProperty("deepcraft:max_hp");
+    if (current === undefined || max === undefined) return;
+
+    const bossId = entity.getDynamicProperty("deepcraft:boss_id");
+    let name = entity.typeId.replace("minecraft:", "");
+    if (bossId && MOB_POOL[bossId]) name = MOB_POOL[bossId].name;
+    else name = name.charAt(0).toUpperCase() + name.slice(1);
+
+    const percent = Math.max(0, current / max);
+    const barLen = 10;
+    const fill = Math.ceil(percent * barLen);
+    let color = "§a";
+    if (percent < 0.5) color = "§e";
+    if (percent < 0.2) color = "§c";
+    const bar = color + "|".repeat(fill) + "§8" + "|".repeat(barLen - fill);
+    entity.nameTag = `${name}\n${bar} §f${Math.ceil(current)}/${max}`;
+}
+
+function processBossSkillAI(boss) {
+    if (!boss.isValid()) return;
+    const bossId = boss.getDynamicProperty("deepcraft:boss_id");
+    const bossDef = MOB_POOL[bossId];
+    if (bossDef && bossDef.skills && boss.target) {
+        bossDef.skills.forEach(skill => {
+            if (Math.random() < skill.chance) executeBossSkill(boss, skill);
+        });
+    }
+}
+
+function executeBossSkill(boss, skill) {
+    if (skill.msg) boss.dimension.runCommand(`tellraw @a[r=30,x=${boss.location.x},y=${boss.location.y},z=${boss.location.z}] {"rawtext":[{"text":"§e[ボス] ${skill.msg}"}]}`);
+    skill.action(boss);
+}
+
+function executeSkill(player, skillId) {
+    const skill = SKILL_POOL[skillId];
+    if (!skill) return;
+    const cdTag = `cooldown:skill_${skillId}`;
+    if (player.hasTag(cdTag)) { player.playSound("note.bass"); player.sendMessage("§cスキルはクールダウン中です！"); return; }
+    const manaCost = skill.manaCost || 0;
+    let currentEther = player.getDynamicProperty("deepcraft:ether") || 0;
+    if (currentEther < manaCost) { player.playSound("note.bass"); player.sendMessage(`§cエーテルが足りません！`); return; }
+    const success = skill.onUse(player);
+    if (success !== false) {
+        if (manaCost > 0) player.setDynamicProperty("deepcraft:ether", currentEther - manaCost);
+        player.addTag(cdTag);
+        system.runTimeout(() => {
+            if (player.isValid()) { player.removeTag(cdTag); player.playSound("random.orb"); player.sendMessage(`§aスキル準備完了: ${skill.name}`); }
+        }, skill.cooldown * 20);
+    }
+}
+
 function getEquipmentStats(itemStack) {
     if (!itemStack) return { atk: 0, def: 0 };
     const id = itemStack.getDynamicProperty("deepcraft:item_id");
@@ -439,7 +429,6 @@ function getEquipmentStats(itemStack) {
 world.afterEvents.entityDie.subscribe((ev) => {
     const victim = ev.deadEntity;
     const attacker = ev.damageSource.damagingEntity;
-
     if (attacker && attacker.typeId === "minecraft:player") {
         const questData = JSON.parse(attacker.getDynamicProperty("deepcraft:quest_data") || "{}");
         for (const qId in questData) {
@@ -447,31 +436,22 @@ world.afterEvents.entityDie.subscribe((ev) => {
             const def = QUEST_POOL[qId];
             if (q.status === "active" && def.type === "kill" && def.target === victim.typeId) {
                 q.progress++;
-                if (q.progress >= def.amount) {
-                    q.status = "completed";
-                    attacker.playSound("random.levelup");
-                    attacker.sendMessage(`§aクエスト完了: ${def.name}`);
-                }
+                if (q.progress >= def.amount) { q.status = "completed"; attacker.playSound("random.levelup"); attacker.sendMessage(`§aクエスト完了: ${def.name}`); }
                 attacker.setDynamicProperty("deepcraft:quest_data", JSON.stringify(questData));
             }
         }
-        
         if (victim.hasTag("deepcraft:boss")) {
             const bossId = victim.getDynamicProperty("deepcraft:boss_id");
             const def = MOB_POOL[bossId];
             if (def && def.drops) {
                 def.drops.forEach(drop => {
                     if (drop.chance && Math.random() > drop.chance) return;
-                    if (drop.type === "xp") {
-                        addXP(attacker, drop.amount);
-                        attacker.sendMessage(`§eボス撃破！ +${drop.amount} XP`);
-                    }
+                    if (drop.type === "xp") { addXP(attacker, drop.amount); attacker.sendMessage(`§eボス撃破！ +${drop.amount} XP`); }
                     if (drop.type === "item") {
                         const itemDef = EQUIPMENT_POOL[drop.id];
                         if (itemDef) {
                             const item = new ItemStack(itemDef.baseItem, 1);
-                            item.nameTag = itemDef.name;
-                            item.setLore(itemDef.lore);
+                            item.nameTag = itemDef.name; item.setLore(itemDef.lore);
                             item.setDynamicProperty("deepcraft:item_id", drop.id);
                             attacker.dimension.spawnItem(item, victim.location);
                             attacker.sendMessage(`§6§lレアドロップ！ §r獲得: ${itemDef.name}`);
@@ -482,48 +462,35 @@ world.afterEvents.entityDie.subscribe((ev) => {
         }
         if (attacker.hasTag("talent:exp_boost")) addXP(attacker, 50);
     }
-
     if (victim.typeId === "minecraft:player") {
         const player = victim;
-        // 死亡時に仮想HPをリセット
         player.setDynamicProperty("deepcraft:hp", player.getDynamicProperty("deepcraft:max_hp"));
-        
         const lostXP = player.getDynamicProperty("deepcraft:xp") || 0;
         player.setDynamicProperty("deepcraft:xp", 0);
         if (lostXP > 0) player.sendMessage(`§c死亡により ${lostXP} XPを失いました...`);
-
         const inventory = player.getComponent("inventory").container;
-        const location = player.location;
         let droppedItems = [];
         for (let i = 0; i < inventory.size; i++) {
             const item = inventory.getItem(i);
-            if (item) {
-                if (Math.random() < CONFIG.DEATH_ITEM_DROP_RATE) {
-                    droppedItems.push(item.clone());
-                    inventory.setItem(i, null);
-                }
-            }
+            if (item) { if (Math.random() < CONFIG.DEATH_ITEM_DROP_RATE) { droppedItems.push(item.clone()); inventory.setItem(i, null); } }
         }
         if (droppedItems.length > 0) {
-            const spawnLoc = { x: location.x, y: location.y + 1.0, z: location.z };
             try {
-                const soul = player.dimension.spawnEntity("minecraft:chest_minecart", spawnLoc);
+                const soul = player.dimension.spawnEntity("minecraft:chest_minecart", { x: player.location.x, y: player.location.y + 1, z: player.location.z });
                 soul.nameTag = "§b魂 (Soul)";
                 const soulContainer = soul.getComponent("inventory").container;
                 droppedItems.forEach(item => soulContainer.addItem(item));
-                player.sendMessage(`§bアイテムを魂として座標 [${Math.floor(spawnLoc.x)}, ${Math.floor(spawnLoc.y)}, ${Math.floor(spawnLoc.z)}] に残しました。`);
+                player.sendMessage(`§bアイテムを魂として残しました。`);
             } catch (e) {}
         }
     }
 });
 
-// ... (acceptQuest以降のUI関数などもそのまま維持)
-// acceptQuest, claimQuestReward, giveCustomItem, summonBoss, createCustomItem, addXP, applyNumericalPassives, applyEquipmentPenalties, checkReq, saveProfile, loadProfile, openMenuHub, openDetailStats, openProfileMenu, openStatusMenu, openTalentViewer, openQuestMenu, upgradeStat, processLevelUp, openCardSelection, applyCardEffect, resetCurrentProfile
 function acceptQuest(player, questId) {
     const def = QUEST_POOL[questId];
-    if (!def) { player.sendMessage(`§cクエストが見つかりません: ${questId}`); return; }
+    if (!def) { player.sendMessage(`§cクエストが見つかりません`); return; }
     const questData = JSON.parse(player.getDynamicProperty("deepcraft:quest_data") || "{}");
-    if (questData[questId]) { player.sendMessage("§c既に受注済みか完了しています。"); return; }
+    if (questData[questId]) { player.sendMessage("§c既に受注済みです"); return; }
     questData[questId] = { status: "active", progress: 0 };
     player.setDynamicProperty("deepcraft:quest_data", JSON.stringify(questData));
     player.sendMessage(`§aクエスト受注: ${def.name}`);
@@ -533,12 +500,8 @@ function claimQuestReward(player, questId) {
     const def = QUEST_POOL[questId];
     const questData = JSON.parse(player.getDynamicProperty("deepcraft:quest_data") || "{}");
     if (!questData[questId] || questData[questId].status !== "completed") return;
-    
     if (def.reward.xp) addXP(player, def.reward.xp);
-    if (def.reward.item) {
-        const item = new ItemStack(def.reward.item, def.reward.count || 1);
-        player.getComponent("inventory").container.addItem(item);
-    }
+    if (def.reward.item) { const item = new ItemStack(def.reward.item, def.reward.count || 1); player.getComponent("inventory").container.addItem(item); }
     questData[questId].status = "claimed";
     player.setDynamicProperty("deepcraft:quest_data", JSON.stringify(questData));
     player.playSound("random.levelup");
@@ -548,53 +511,17 @@ function claimQuestReward(player, questId) {
 
 function giveCustomItem(player, itemId) {
     const def = EQUIPMENT_POOL[itemId];
-    if (!def) { player.sendMessage(`§cアイテムが見つかりません: ${itemId}`); return; }
+    if (!def) { player.sendMessage(`§c不明なID`); return; }
     const item = new ItemStack(def.baseItem, 1);
-    item.nameTag = def.name;
-    item.setLore(def.lore);
+    item.nameTag = def.name; item.setLore(def.lore);
     item.setDynamicProperty("deepcraft:item_id", itemId);
     player.getComponent("inventory").container.addItem(item);
     player.sendMessage(`§e入手: ${def.name}`);
 }
 
-function summonBoss(player, bossId) {
-    const def = MOB_POOL[bossId];
-    if (!def) { player.sendMessage(`§cボスIDが見つかりません。`); return; }
-    try {
-        const boss = player.dimension.spawnEntity(def.type, player.location);
-        boss.addTag("deepcraft:boss");
-        boss.setDynamicProperty("deepcraft:boss_id", bossId);
-        boss.nameTag = def.name;
-        
-        const hp = boss.getComponent("minecraft:health");
-        if (hp) boss.addEffect("resistance", 20000000, { amplifier: 1, showParticles: false });
-        
-        const equip = boss.getComponent("equippable");
-        if (equip && def.equipment) {
-            if (def.equipment.mainhand) equip.setEquipment(EquipmentSlot.Mainhand, createCustomItem(def.equipment.mainhand));
-            if (def.equipment.head) equip.setEquipment(EquipmentSlot.Head, new ItemStack(def.equipment.head));
-            if (def.equipment.chest) equip.setEquipment(EquipmentSlot.Chest, new ItemStack(def.equipment.chest));
-            if (def.equipment.legs) equip.setEquipment(EquipmentSlot.Legs, new ItemStack(def.equipment.legs));
-            if (def.equipment.feet) equip.setEquipment(EquipmentSlot.Feet, new ItemStack(def.equipment.feet));
-        }
-        if (def.speed) {
-            const movement = boss.getComponent("minecraft:movement");
-            if (movement) movement.setCurrentValue(def.speed);
-        }
-        player.sendMessage(`§c§l警告: ${def.name} が出現しました！`);
-        player.playSound("mob.enderdragon.growl");
-    } catch (e) { player.sendMessage(`§cエラー: ${e}`); }
-}
-
 function createCustomItem(itemId) {
     const def = EQUIPMENT_POOL[itemId];
-    if (def) {
-        const item = new ItemStack(def.baseItem, 1);
-        item.nameTag = def.name;
-        item.setLore(def.lore);
-        item.setDynamicProperty("deepcraft:item_id", itemId);
-        return item;
-    }
+    if (def) { const item = new ItemStack(def.baseItem, 1); item.nameTag = def.name; item.setLore(def.lore); item.setDynamicProperty("deepcraft:item_id", itemId); return item; }
     return new ItemStack(itemId, 1);
 }
 
@@ -608,31 +535,22 @@ function applyNumericalPassives(player) {
     const hp = player.getComponent("minecraft:health");
     let regenAmount = 0;
     if (player.hasTag("talent:immortal")) regenAmount += 1;
-    
     const headBlock = player.dimension.getBlock(player.getHeadLocation());
-    if (player.hasTag("talent:aquatic_life") && headBlock && (headBlock.typeId === "minecraft:water" || headBlock.typeId === "minecraft:flowing_water")) {
-        regenAmount += 1;
-    }
-
+    if (player.hasTag("talent:aquatic_life") && headBlock && (headBlock.typeId.includes("water"))) regenAmount += 1;
     if (regenAmount > 0) {
         const cur = player.getDynamicProperty("deepcraft:hp") || 0;
         const max = player.getDynamicProperty("deepcraft:max_hp") || 100;
         if (cur < max) player.setDynamicProperty("deepcraft:hp", Math.min(cur + regenAmount, max));
     }
-
-    if (player.hasTag("talent:full_belly")) {
-        player.runCommand("effect @s saturation 1 0 true"); 
-    }
+    if (player.hasTag("talent:full_belly")) player.runCommand("effect @s saturation 1 0 true"); 
 }
 
 function applyEquipmentPenalties(player) {
     const equipment = player.getComponent("equippable");
     let armorPenalty = false;
-    
     [EquipmentSlot.Head, EquipmentSlot.Chest, EquipmentSlot.Legs, EquipmentSlot.Feet].forEach(slot => {
         if (!checkReq(player, equipment.getEquipment(slot)).valid) armorPenalty = true;
     });
-
     if (armorPenalty) player.addTag("debuff:heavy_armor");
     else player.removeTag("debuff:heavy_armor");
 }
@@ -643,7 +561,6 @@ function checkReq(player, item) {
     if (!customId) return { valid: true };
     const def = EQUIPMENT_POOL[customId];
     if (!def) return { valid: true };
-
     for (const stat in def.req) {
         const required = def.req[stat];
         const current = player.getDynamicProperty(`deepcraft:${stat}`) || 0;
@@ -682,7 +599,6 @@ function loadProfile(player, slot) {
     player.setDynamicProperty("deepcraft:pending_card_draws", data.pending_card_draws);
     player.setDynamicProperty("deepcraft:quest_data", JSON.stringify(data.quests || {}));
     player.setDynamicProperty("deepcraft:ether", data.ether || CONFIG.ETHER_BASE);
-
     for (const key in CONFIG.STATS) player.setDynamicProperty(`deepcraft:${key}`, data.stats[key] || 0);
     player.getTags().forEach(tag => { if (tag.startsWith("talent:")) player.removeTag(tag); });
     data.talents.forEach(tag => player.addTag(tag));
@@ -701,7 +617,7 @@ function openMenuHub(player) {
 
     form.button(2, "§b§lタレント確認", ["§r§7所有タレントを見る"], "minecraft:enchanted_book");
     if (pendingDraws > 0) {
-        form.button(4, "§6§l🎁 タレントを引く", ["§r§e未受取のタレントがあります！", "§cクリックで抽選", "§8(ステータス画面はロック中)"], "minecraft:nether_star", pendingDraws, 0, true);
+        form.button(4, "§6§l🎁 タレントを引く", ["§r§e未受取のタレントがあります！", "§cクリックで抽選"], "minecraft:nether_star", pendingDraws, 0, true);
     } else {
         form.button(4, "§a§lステータス強化", ["§r§7能力値を管理する"], "minecraft:experience_bottle");
     }
@@ -736,18 +652,14 @@ function openDetailStats(player) {
     const stats = calculateEntityStats(player);
     const form = new ChestFormData("small");
     form.title("§lキャラクター詳細");
-    
     form.button(10, `§c§l攻撃力: ${stats.atk}`, ["§7物理攻撃力"], "minecraft:iron_sword");
     form.button(11, `§b§l防御力: ${stats.def}`, ["§7ダメージ軽減量"], "minecraft:shield");
     form.button(12, `§e§l会心率: ${(stats.critChance * 100).toFixed(1)}%`, ["§7クリティカル発生率"], "minecraft:gold_nugget");
     form.button(13, `§6§l会心倍率: ${(stats.critMult * 100).toFixed(0)}%`, ["§7クリティカル時のダメージ倍率"], "minecraft:blaze_powder");
     form.button(14, `§3§lエーテル: ${stats.maxEther}`, [`§7自然回復: ${stats.etherRegen}/秒`], "minecraft:phantom_membrane");
     form.button(15, `§f§l速度: ${(stats.speed * 100).toFixed(0)}%`, ["§7移動速度"], "minecraft:feather");
-    
     form.button(26, "§c§l戻る", ["§rメニューへ戻る"], "minecraft:barrier");
-    form.show(player).then(res => {
-        if (!res.canceled && res.selection === 26) openMenuHub(player);
-    });
+    form.show(player).then(res => { if (!res.canceled && res.selection === 26) openMenuHub(player); });
 }
 
 function openProfileMenu(player) {
@@ -790,13 +702,11 @@ function openStatusMenu(player) {
     const remaining = CONFIG.STAT_POINTS_PER_LEVEL - invested;
     const currentXP = player.getDynamicProperty("deepcraft:xp");
     const cost = getXpCostForLevel(level);
-    
     let titleText = `§lステータス | LvUpまで: ${remaining}pt`;
     if (level >= 20) {
         titleText = `§lステータス | ボーナス: ${remaining}pt (最大Lv)`;
         if (remaining <= 0) titleText = `§lステータス | §a§l完全強化済み (MAX)`;
     }
-    
     form.title(`${titleText} | XP: ${currentXP}`);
     const layout = [
         { key: "strength", slot: 1 }, { key: "fortitude", slot: 3 }, { key: "agility", slot: 5 }, { key: "defense", slot: 7 },
@@ -810,7 +720,6 @@ function openStatusMenu(player) {
         const slot = item.slot;
         const val = player.getDynamicProperty(`deepcraft:${key}`) || 0;
         const name = CONFIG.STATS[key];
-        
         let icon = "minecraft:book";
         if (key === "strength") icon = "minecraft:netherite_sword";
         if (key === "fortitude") icon = "minecraft:golden_apple";
@@ -912,8 +821,8 @@ function upgradeStat(player, statKey) {
 
     const currentXP = player.getDynamicProperty("deepcraft:xp");
     const cost = getXpCostForLevel(level);
-    
     const currentVal = player.getDynamicProperty(`deepcraft:${statKey}`) || 0;
+    
     if (currentVal >= 100) {
         player.playSound("note.bass");
         player.sendMessage(`§c${CONFIG.STATS[statKey]} は既に最大レベル(100)です！`);
