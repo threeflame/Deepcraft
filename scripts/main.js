@@ -1134,3 +1134,8 @@ function resetCurrentProfile(player) {
     player.playSound("random.break");
     player.sendMessage(`§c[デバッグ] プロファイル スロット${currentSlot} をリセットしました。`);
 }
+world.afterEvents.playerLeave.subscribe((ev) => {
+    if (playerStateCache.has(ev.playerId)) {
+        playerStateCache.delete(ev.playerId);
+    }
+});
