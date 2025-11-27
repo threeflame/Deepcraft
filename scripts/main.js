@@ -16,23 +16,21 @@ import { MOB_POOL } from "./data/mobs.js";
 world.afterEvents.playerSpawn.subscribe((ev) => {
     try {
         const player = ev.player;
-        
-        // 初回初期化
         if (!player.getDynamicProperty("deepcraft:active_profile")) {
             initializePlayer(player);
         }
-
-        // ★修正: 仮想HPを必ず最大値にリセット (ゾンビ化防止)
-        const maxHP = player.getDynamicProperty("deepcraft:max_hp") || 100;
-        player.setDynamicProperty("deepcraft:hp", maxHP);
-
-        // ★修正: 無敵時間管理用の数値をリセット (計算バグ防止)
-        player.setDynamicProperty("deepcraft:last_hurt_tick", system.currentTick);
-
-        // バニラHPを全回復 (器の修復)
+        // スポーン時はHP満タンで開始 (即死防止用の器)
         const hp = player.getComponent("minecraft:health");
         if (hp) hp.resetToMax();
-        
+
+        // ★追加: Hitbox Desync対策
+        // 2 tick (0.1秒) 遅らせてサイズリセットイベントを送ることで、判定ズレを直す
+        system.runTimeout(() => {
+            if (player.isValid()) {
+                player.triggerEvent("scale_reset");
+            }
+        }, 2);
+
     } catch (e) { console.warn("Spawn Error: " + e); }
 });
 
