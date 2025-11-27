@@ -32,7 +32,8 @@ function initializePlayer(player) {
     loadProfile(player, 1);
     player.sendMessage("§aDeepCraftシステムを初期化しました。");
 }
-
+// ★追加: プレイヤーの状態を記憶するキャッシュ変数を定義 (Global Scope)
+const playerStateCache = new Map();
 // --- System Loop (Main Cycle) ---
 
 system.runInterval(() => {
@@ -454,22 +455,92 @@ world.afterEvents.entityHurt.subscribe((ev) => {
 // --- Helper Functions (Profile / Stats) ---
 
 function applyStatsToEntity(player) {
-    const stats = calculateEntityStats(player);
-    player.setDynamicProperty("deepcraft:max_hp", stats.maxHP);
-    
-    const current = player.getDynamicProperty("deepcraft:hp");
-    // まだ設定されていない、または最大を超えていたら調整
-    if (current === undefined || current > stats.maxHP) {
-        player.setDynamicProperty("deepcraft:hp", stats.maxHP);
+    // プレイヤーが無効なら処理しない
+    if (!player.isValid()) {
+        playerStateCache.delete(player.id);
+        return;
     }
 
-    if (player.hasTag("talent:heavy_stance")) player.triggerEvent("knockback_resistance100");
-    else player.triggerEvent("knockback_resistance_reset");
+    const stats = {};
+    for (const key in CONFIG.STATS) stats[key] = player.getDynamicProperty(`deepcraft:${key}`) || 1;
 
-    let speedIndex = Math.floor(stats.speed * 100); 
+    // --- HP計算 ---
+    let baseHealth = 18 + (stats.fortitude * 2);
+    if (player.hasTag("talent:vitality_1")) baseHealth += 4;
+    if (player.hasTag("talent:vitality_2")) baseHealth += 10;
+    if (player.hasTag("talent:glass_cannon")) baseHealth = Math.floor(baseHealth * 0.5);
+
+    const healthVal = Math.min(Math.max(baseHealth, 20), 300); 
+
+    // --- 移動速度計算 ---
+    let speedIndex = 10 + Math.floor(stats.agility * 0.2); 
+    if (player.hasTag("talent:swift_1")) speedIndex += 5; 
+    if (player.hasTag("talent:godspeed")) speedIndex += 15;
+    if (player.hasTag("debuff:heavy_armor")) speedIndex = Math.max(5, speedIndex - 10);
     speedIndex = Math.min(Math.max(speedIndex, 0), 300);
-    player.triggerEvent(`movement${speedIndex}`);
-    player.triggerEvent("attack1");
+
+    // --- ノックバック耐性計算 ---
+    const hasHeavyStance = player.hasTag("talent:heavy_stance");
+
+    // --- 攻撃力 (固定1?) ---
+    // コード上は常にattack1が呼ばれていましたが、負荷軽減のため変更監視対象にします
+    const attackVal = 1; 
+
+    // --- キャッシュチェック & イベント適用 ---
+    
+    // まだキャッシュがない場合は初期作成
+    let cache = playerStateCache.get(player.id);
+    if (!cache) {
+        cache = { 
+            health: -1, 
+            speed: -1, 
+            heavyStance: null,
+            attack: -1
+        };
+        playerStateCache.set(player.id, cache);
+    }
+
+    // 1. HP更新チェック
+    if (cache.health !== healthVal) {
+        player.triggerEvent(`health${healthVal}`);
+        
+        // HPが増えた場合、即座に回復させる処理が必要か検討(通常Maxが増えても現在は増えない)
+        // もしMaxHP変更時に回復させたい場合はここに処理を追加します
+        
+        cache.health = healthVal;
+    }
+
+    // 2. 移動速度更新チェック
+    if (cache.speed !== speedIndex) {
+        player.triggerEvent(`movement${speedIndex}`);
+        cache.speed = speedIndex;
+    }
+
+    // 3. ノックバック耐性更新チェック
+    if (cache.heavyStance !== hasHeavyStance) {
+        if (hasHeavyStance) {
+            player.triggerEvent("knockback_resistance100");
+        } else {
+            player.triggerEvent("knockback_resistance_reset");
+        }
+        cache.heavyStance = hasHeavyStance;
+    }
+
+    // 4. 攻撃力更新チェック (常に1で固定されているようですが、監視対象にします)
+    if (cache.attack !== attackVal) {
+        player.triggerEvent(`attack${attackVal}`);
+        cache.attack = attackVal;
+    }
+
+    // --- その他 (プロパティ設定などイベントを使わないものは毎回実行でも負荷は低いですが、必要なら最適化) ---
+    try { 
+        // 現在の値と同じならセットしない判定を入れるとさらに軽量化できますが、
+        // setProperty自体はそこまで重くないため、そのままでも許容範囲です。
+        const currentArrowDmg = player.getProperty("status:arrow_damage");
+        if (currentArrowDmg !== stats.light) {
+            player.setProperty("status:arrow_damage", stats.light);
+        }
+    } catch (e) {}
 }
 
 function getEquipmentStats(itemStack) {
