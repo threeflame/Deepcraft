@@ -23,11 +23,10 @@ export const MOB_POOL = {
             {
                 id: "summon_minions",
                 chance: 0.05, 
-                msg: "§cMinions, aid me!",
+                msg: "§c野郎ども、やっちまえ！",
                 action: (entity) => {
                     entity.dimension.spawnEntity("minecraft:zombie", entity.location);
                     entity.dimension.spawnEntity("minecraft:zombie", entity.location);
-                    // ★修正: entity.dimension.playSoundを使用
                     entity.dimension.playSound("mob.zombie.say", entity.location);
                 }
             }
@@ -56,22 +55,20 @@ export const MOB_POOL = {
             {
                 id: "charge",
                 chance: 0.08,
-                msg: "§4§lCHARGE!",
+                msg: "§4§l突撃！！",
                 action: (entity) => {
                     const view = entity.getViewDirection();
                     entity.applyKnockback(view.x, view.z, 5.0, 0.0); 
                     entity.addEffect("speed", 60, { amplifier: 4 });
-                    // ★修正
                     entity.dimension.playSound("mob.ravager.roar", entity.location);
                 }
             },
             {
                 id: "ground_smash",
                 chance: 0.05,
-                msg: "§cCRUSH!",
+                msg: "§c粉砕！",
                 action: (entity) => {
                     entity.dimension.spawnParticle("minecraft:large_explosion", entity.location);
-                    // ★修正
                     entity.dimension.playSound("random.explode", entity.location);
                     
                     const players = entity.dimension.getPlayers({ location: entity.location, maxDistance: 5 });
@@ -104,7 +101,7 @@ export const MOB_POOL = {
             {
                 id: "fireball_barrage",
                 chance: 0.1, 
-                msg: "§5Burn to ash...",
+                msg: "§5灰となれ...",
                 action: (entity) => {
                     for(let i=0; i<3; i++) {
                         const fb = entity.dimension.spawnEntity("minecraft:small_fireball", {
@@ -112,14 +109,13 @@ export const MOB_POOL = {
                         });
                         fb.applyImpulse({ x: (Math.random()-0.5)*2, y: (Math.random()-0.5)*2, z: (Math.random()-0.5)*2 });
                     }
-                    // ★修正
                     entity.dimension.playSound("mob.ghast.shoot", entity.location);
                 }
             },
             {
                 id: "ice_nova",
                 chance: 0.05,
-                msg: "§bFreeze!",
+                msg: "§b凍り付け！",
                 action: (entity) => {
                     entity.dimension.spawnParticle("minecraft:snowflake_particle", entity.location);
                     const players = entity.dimension.getPlayers({ location: entity.location, maxDistance: 8 });
@@ -127,7 +123,6 @@ export const MOB_POOL = {
                         p.addEffect("slowness", 100, { amplifier: 3 });
                         p.applyDamage(5);
                     });
-                    // ★修正
                     entity.dimension.playSound("random.glass", entity.location);
                 }
             }

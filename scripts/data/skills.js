@@ -24,7 +24,7 @@ export const SKILL_POOL = {
         }
     },
 
-    // 火の玉 (Fireball) - ★修正: 雪玉ベースに変更
+    // 火の玉 (Fireball)
     "fireball": {
         name: "§cFireball",
         cooldown: 8,
@@ -33,14 +33,12 @@ export const SKILL_POOL = {
             const headLoc = player.getHeadLocation();
             const viewDir = player.getViewDirection();
             
-            // 雪玉を召喚 (Small Fireballは召喚不可のため)
             const projectile = player.dimension.spawnEntity("minecraft:snowball", {
                 x: headLoc.x + viewDir.x * 1.5,
                 y: headLoc.y + viewDir.y * 1.5,
                 z: headLoc.z + viewDir.z * 1.5
             });
             
-            // 発射
             const projComp = projectile.getComponent("minecraft:projectile");
             if (projComp) {
                 projComp.owner = player;
@@ -49,22 +47,16 @@ export const SKILL_POOL = {
 
             player.playSound("mob.ghast.fireball");
 
-            // ★追加: 炎のパーティクルを纏わせるループ処理
-            // 弾が消えるか、一定時間が経つまで炎を出し続ける
             const intervalId = system.runInterval(() => {
                 if (projectile && projectile.isValid()) {
                     try {
-                        // 炎と溶岩のパーティクル
                         player.dimension.spawnParticle("minecraft:basic_flame_particle", projectile.location);
                         player.dimension.spawnParticle("minecraft:lava_particle", projectile.location);
                     } catch(e) {}
                 } else {
-                    // 弾が消えたらループ終了
                     system.clearRun(intervalId);
                 }
-            }, 1); // 1tickごとに実行
-
-            // 安全策: 5秒経ったら強制終了 (無限ループ防止)
+            }, 1);
             system.runTimeout(() => system.clearRun(intervalId), 100);
         }
     },
@@ -87,16 +79,14 @@ export const SKILL_POOL = {
             const targets = dimension.getEntities(options);
             
             if (targets.length === 0) {
-                player.sendMessage("§cNo targets nearby.");
-                return false; 
+                player.sendMessage("§c近くに対象がいません。");
+                return false;
             }
 
             targets.forEach(target => {
                 if (target.id !== player.id) {
                     dimension.spawnEntity("minecraft:lightning_bolt", target.location);
                     target.applyDamage(5);
-
-                    // スパーク演出
                     for(let i=0; i<8; i++) {
                         try {
                             dimension.spawnParticle("minecraft:endrod", {
@@ -134,7 +124,6 @@ export const SKILL_POOL = {
             }
             player.playSound("random.bow");
 
-            // 発射エフェクト
             player.dimension.spawnParticle("minecraft:snowflake_particle", headLoc);
             player.dimension.spawnParticle("minecraft:snowballpoof_particle", {
                 x: headLoc.x + viewDir.x,
@@ -152,9 +141,8 @@ export const SKILL_POOL = {
         onUse: (player) => {
             player.addEffect("regeneration", 100, { amplifier: 1 });
             player.playSound("random.levelup");
-            player.sendMessage("§aHealing Aura Activated!");
+            player.sendMessage("§a癒やしの波動 発動！");
 
-            // 螺旋エフェクト
             const steps = 20;
             for(let i=0; i<steps; i++) {
                 system.runTimeout(() => {
@@ -198,7 +186,6 @@ export const SKILL_POOL = {
             player.playSound("random.explode");
             dimension.spawnParticle("minecraft:large_explosion", loc);
 
-            // 炎のリング
             for (let i = 0; i < 20; i++) {
                 const angle = (i / 20) * Math.PI * 2;
                 const x = loc.x + Math.cos(angle) * radius;
@@ -220,7 +207,7 @@ export const SKILL_POOL = {
             player.addEffect("strength", 200, { amplifier: 1 });
             player.addEffect("speed", 200, { amplifier: 0 });
             player.playSound("mob.ravager.roar");
-            player.sendMessage("§cWAR CRY!!!");
+            player.sendMessage("§cウォークライ！！！");
 
             const loc = player.location;
             for(let i=0; i<10; i++) {
