@@ -81,7 +81,11 @@
         "minecraft:attack":{"damage":1}
       },
       "health_reset": {
-        "minecraft:health":{"max":20}
+        "minecraft:health": {
+          "value": 200, 
+          "max": 200    
+        }
+      }
       },
       "movement_reset": {
         "minecraft:movement":{"value":0.1}
@@ -1944,6 +1948,12 @@
         ]
       }
     },
+    
+      "minecraft:health": {
+        "value": 200,
+        "max": 200
+      },
+    
 
     "events": {
       "reset": {
@@ -3601,7 +3611,7 @@
       }
     }
   }
-}
+
 
 
 
