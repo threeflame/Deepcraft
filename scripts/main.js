@@ -80,6 +80,7 @@ function initializePlayer(player) {
     player.sendMessage("§aDeepCraftシステムを初期化しました。");
 }
 
+
 // --- System Loop (修正版) ---
 
 system.runInterval(() => {
@@ -451,26 +452,6 @@ world.afterEvents.itemUse.subscribe((ev) => {
             }
         }
     }
-});
-
-// --- Command System (Chat Trigger) ---
-
-world.beforeEvents.chatSend.subscribe((ev) => {
-    const message = ev.message;
-    // "!" で始まらない発言は無視（普通のチャット）
-    if (!message.startsWith("!")) return;
-
-    ev.cancel = true; // チャット欄には表示させない
-    const player = ev.sender;
-
-    // 安全のため system.run で遅延実行
-    system.run(() => {
-        try {
-            handleChatCommand(player, message);
-        } catch (e) {
-            console.warn("Command Error: " + e);
-        }
-    });
 });
 
 function handleChatCommand(player, message) {
@@ -1402,4 +1383,12 @@ world.afterEvents.playerLeave.subscribe((ev) => {
             console.warn(`Combat Log Drop Error: ${e}`);
         }
     }
+});
+
+// beforechatイベントを購読する
+world.events.beforeChat.subscribe(ev => {
+  if(ev.message === "!killall"){  // もしチャットの内容が !killall だった場合、
+    // killコマンドを実行する
+    ev.sender.runCommandAsync("kill @e[type=!player]");
+  }
 });
