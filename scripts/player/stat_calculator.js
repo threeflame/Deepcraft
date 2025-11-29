@@ -4,7 +4,7 @@ import { CONFIG } from "../config.js";
 import { EQUIPMENT_POOL } from "../data/equipment.js";
 import { MOB_POOL } from "../data/mobs.js";
 
-export function calculateEntityStats(entity) {
+export function calculateEntityStats(entity) { // exportされていることを確認
     const stats = {
         atk: 0, def: 0, critChance: CONFIG.COMBAT.BASE_CRIT_CHANCE, critMult: CONFIG.COMBAT.BASE_CRIT_MULT,
         speed: 1.0, maxEther: CONFIG.ETHER_BASE, etherRegen: CONFIG.ETHER_REGEN_BASE, maxHP: 100, evasion: 0,

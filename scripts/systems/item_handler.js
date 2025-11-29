@@ -5,6 +5,7 @@ import { EQUIPMENT_POOL } from "../data/equipment.js";
 import { checkReq } from "../player/player_manager.js";
 import { executeSkill } from "../player/skill_manager.js";
 import { MOB_POOL } from "../data/mobs.js";
+import { calculateEntityStats } from "../player/stat_calculator.js";
 
 export function handleItemUse(event) {
     const player = event.source;
@@ -74,7 +75,13 @@ export function summonBoss(player, bossId) {
         boss.setDynamicProperty("deepcraft:boss_id", bossId);
         boss.nameTag = def.name;
 
-        if (boss.getComponent("minecraft:health")) boss.addEffect("resistance", 20000000, { amplifier: 1, showParticles: false });
+        const health = boss.getComponent("minecraft:health");
+        if (health) {
+            // ★変更: 耐性ではなく、ヘルスブーストで最大HPを大幅に引き上げて不死身にする
+            boss.addEffect("health_boost", 20000000, { amplifier: 255, showParticles: false });
+            // 現在のHPを新しい最大値に設定
+            health.resetToMaxValue();
+        }
 
         const equip = boss.getComponent("equippable");
         if (equip && def.equipment) {
@@ -82,6 +89,9 @@ export function summonBoss(player, bossId) {
                 equip.setEquipment(slot, createCustomItem(itemId));
             });
         }
+        // ★追加: 召喚時にステータスを初期化し、HPバーを即時表示させる
+        calculateEntityStats(boss);
+
         player.sendMessage(`§c§l警告: ${def.name} が出現しました！`);
         player.playSound("mob.enderdragon.growl");
     } catch (e) { player.sendMessage(`§cエラー: ${e}`); }

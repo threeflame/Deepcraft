@@ -130,7 +130,7 @@ function playerLoop(player) {
     applyStatsToEntity(player);
 }
 
-export function updateMobNameTag(entity) { // ★ exportされていることを確認
+function updateMobNameTag(entity) {
     if (!entity.isValid()) return;
     const current = entity.getDynamicProperty("deepcraft:hp");
     const max = entity.getDynamicProperty("deepcraft:max_hp");

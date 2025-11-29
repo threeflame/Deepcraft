@@ -2,7 +2,6 @@ import { EquipmentSlot } from "@minecraft/server";
 import { CONFIG } from "../config.js";
 import { calculateEntityStats } from "../player/stat_calculator.js";
 import { checkReq } from "../player/player_manager.js";
-import { updateMobNameTag } from "../systems/game_loop.js"; // This will be handled by game_loop.js
 
 export function handleEntityHurt(event) {
     const { hurtEntity: victim, damageSource, damage } = event;
@@ -57,23 +56,20 @@ export function handleEntityHurt(event) {
     }
 
     // B. 防御側
-    if (victim.typeId === "minecraft:player" && Math.random() < victimStats.evasion) { 
+    if (victim.typeId === "minecraft:player" && Math.random() < victimStats.evasion) {
         victim.playSound("random.orb");
         victim.sendMessage("§a回避！");
-        return;
+        finalDamage = 0; // ダメージを0にするが、処理は続行する
+    } else {
+        finalDamage = Math.max(CONFIG.COMBAT.MIN_DAMAGE, finalDamage - victimStats.def);
     }
 
-    finalDamage = Math.max(CONFIG.COMBAT.MIN_DAMAGE, finalDamage - victimStats.def);
     finalDamage = Math.floor(finalDamage);
 
     // 2. 仮想HPへの適用
     const currentHP = victim.getDynamicProperty("deepcraft:hp") ?? victimStats.maxHP;
     const newHP = currentHP - finalDamage;
     victim.setDynamicProperty("deepcraft:hp", newHP);
-
-    if (victim.typeId !== "minecraft:player") {
-        updateMobNameTag(victim);
-    }
 
     // 3. 死亡判定
     if (newHP <= 0) {
